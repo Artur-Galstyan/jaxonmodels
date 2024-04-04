@@ -9,10 +9,19 @@ authors = [
   {name = "Artur A. Galstyan", email = "mail@arturgalstyan.dev"},
 ]
 dependencies=[
+  "jax",
+  "equinox",
+  "jaxlib",
   "tqdm",
-  "jaxtyping",
   "beartype",
+  "typing_extensions",
   "loguru",
+  "matplotlib",
+  "optax",
+  "jaxonloader", 
+  "fire",
+  "wandb",
+  "jaxtyping",
 ]
 [project.optional-dependencies]
 dev = [
