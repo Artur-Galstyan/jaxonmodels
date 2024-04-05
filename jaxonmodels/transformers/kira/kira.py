@@ -3,12 +3,11 @@ from typing import Optional
 
 import equinox as eqx
 import jax
-from jaxonmodels.transformers.kira.model_args import KiraModelArgs
-from jaxonmodels.transformers.kira.modules.mha import MultiheadAttention
-from jaxonmodels.transformers.kira.modules.rope_embeddings import (
-    RotaryPositionalEmbedding,
-)
 from jaxtyping import Array, Int, PRNGKeyArray
+
+from jaxonmodels.commons.mha import MultiheadAttention
+from jaxonmodels.commons.rope_embeddings import RotaryPositionalEmbedding
+from jaxonmodels.transformers.kira.model_args import KiraModelArgs
 
 
 class Block(eqx.nn.StatefulLayer):

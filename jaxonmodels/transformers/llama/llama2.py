@@ -4,9 +4,10 @@ from typing import Literal, Optional, Union
 import equinox as eqx
 import jax
 from jaxtyping import Array, Bool, Int, PRNGKeyArray
-from kira.model_args import LLaMAModelArgs
-from kira.modules.mha import MultiheadAttention
-from kira.modules.rope_embeddings import process_heads, RotaryPositionalEmbedding
+
+from jaxonmodels.commons.mha import MultiheadAttention
+from jaxonmodels.commons.rope_embeddings import process_heads, RotaryPositionalEmbedding
+from jaxonmodels.transformers.llama.model_args import LLaMAModelArgs
 
 
 class FFN(eqx.Module):

@@ -5,7 +5,7 @@ import jax
 import jax.numpy as jnp
 from jaxtyping import Array, Float, Int, PRNGKeyArray
 
-from jaxonmodels.transformers.kira.model_args import MambaModelArgs
+from jaxonmodels.ssm.mamba.model_args import MambaModelArgs
 
 
 def selective_scan(
