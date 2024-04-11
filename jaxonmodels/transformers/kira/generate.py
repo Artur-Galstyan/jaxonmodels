@@ -1,8 +1,9 @@
-from typing import Callable
+from typing import Callable, Optional
 
 import equinox as eqx
 import jax
 import jax.numpy as jnp
+import numpy as np
 from jaxtyping import PyTree
 
 
@@ -14,7 +15,7 @@ def generate_text(
     vocab_size: int,
     print_to_console: bool = True,
     random_key_seed: int = 0,
-    state: eqx.nn.State = None,
+    state: Optional[eqx.nn.State] = None,
 ) -> tuple[list[str], list[int]]:
     jitted_model = eqx.filter_jit(model)
     x = jnp.zeros((max_seq_len,), dtype=jnp.int32)
@@ -39,10 +40,10 @@ def generate_text(
         next_token = min(next_token.item(), vocab_size - 1)
 
         if print_to_console:
-            print(decode([next_token]), end="")
+            print(decode(np.array([next_token])), end="")
 
         tokens.append(next_token)
-        decoded_tokens.append(decode([next_token]))
+        decoded_tokens.append(decode(np.array([next_token])))
 
         x = jnp.concatenate((x[1:], jnp.array([next_token])))
     return decoded_tokens, tokens

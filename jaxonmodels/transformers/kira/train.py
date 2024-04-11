@@ -5,14 +5,13 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 import optax
-from jaxonloader import Index, JaxonDataLoader, JITJaxonDataLoader
+from jaxonloader import JaxonDataLoader
 from jaxtyping import Array, Int, PRNGKeyArray, PyTree
 from loguru import logger
 
 
 def train(
-    train_dataloader: JaxonDataLoader | JITJaxonDataLoader,
-    train_index: Index,
+    train_dataloader: JaxonDataLoader,
     learning_rate: float,
     model: PyTree,
     key: PRNGKeyArray,
@@ -23,11 +22,9 @@ def train(
     optimizer = optax.adamw(learning_rate=learning_rate)
     opt_state = optimizer.init(eqx.filter(model, eqx.is_inexact_array))
     loss_value = 0
-    i = 0
-    while it := train_dataloader(train_index):
-        x, train_index, done = it
-        if done:
-            break
+
+    for i, x in enumerate(train_dataloader):
+        x = jnp.array(x)
         x, y = jnp.split(x, 2, axis=1)
         key, subkey = jax.random.split(key)
         model, opt_state, loss_value = step(
@@ -51,11 +48,8 @@ def evaluate(
     model: PyTree,
 ):
     loss = 0
-    while it := test_dataloader(test_index):
-        x, index, done = it
-        if done:
-            break
-        x, y = jnp.split(x, 2, axis=1)
+    for x in test_dataloader:
+        x, y = jnp.split(jnp.array(x), 2, axis=1)
         x = jnp.array(x)
         y = jnp.array(y)
         loss += loss_fn(model, x, y, key=None)
