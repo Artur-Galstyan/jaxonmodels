@@ -5,8 +5,8 @@ import equinox as eqx
 import jax
 from jaxtyping import Array, Bool, Int, PRNGKeyArray
 
-from jaxonmodels.commons.mha import MultiheadAttention
-from jaxonmodels.commons.rope_embeddings import process_heads, RotaryPositionalEmbedding
+from jaxonmodels.layers.mha import MultiheadAttention
+from jaxonmodels.layers.rope_embeddings import process_heads, RotaryPositionalEmbedding
 from jaxonmodels.transformers.llama.model_args import LLaMAModelArgs
 
 

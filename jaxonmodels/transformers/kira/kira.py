@@ -5,8 +5,8 @@ import equinox as eqx
 import jax
 from jaxtyping import Array, Int, PRNGKeyArray
 
-from jaxonmodels.commons.mha import MultiheadAttention
-from jaxonmodels.commons.rope_embeddings import RotaryPositionalEmbedding
+from jaxonmodels.layers.mha import MultiheadAttention
+from jaxonmodels.layers.rope_embeddings import RotaryPositionalEmbedding
 from jaxonmodels.transformers.kira.model_args import KiraModelArgs
 
 
