@@ -3,33 +3,26 @@ name = "jaxonmodels"
 version = "0.1.1"
 description = "JAX models for deep learning"
 readme = "README.md"
-requires-python ="~=3.10"
-license = {file = "LICENSE"}
-authors = [
-  {name = "Artur A. Galstyan", email = "mail@arturgalstyan.dev"},
-]
-dependencies=[
-  "jax",
-  "equinox",
-  "jaxlib",
-  "tqdm",
-  "beartype",
-  "typing_extensions",
-  "loguru",
-  "matplotlib",
-  "optax",
-  "jaxonloader", 
-  "fire",
-  "wandb",
-  "jaxtyping",
+requires-python = "~=3.10"
+license = { file = "LICENSE" }
+authors = [{ name = "Artur A. Galstyan", email = "mail@arturgalstyan.dev" }]
+dependencies = [
+    "jax",
+    "equinox>=0.11.4",
+    "jaxlib",
+    "tqdm",
+    "beartype",
+    "typing_extensions",
+    "loguru",
+    "matplotlib",
+    "optax",
+    "jaxonloader",
+    "fire",
+    "wandb",
+    "jaxtyping",
 ]
 [project.optional-dependencies]
-dev = [
-    "nox",
-    "pre-commit",
-    "pytest",
-    "mkdocs",
-]
+dev = ["nox", "pre-commit", "pytest", "mkdocs"]
 
 [tool.ruff]
 extend-include = ["*.ipynb"]
