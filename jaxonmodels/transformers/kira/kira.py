@@ -6,7 +6,6 @@ import jax
 from jaxtyping import Array, Int, PRNGKeyArray
 
 from jaxonmodels.layers.mha import MultiheadAttention
-from jaxonmodels.layers.rope_embeddings import RotaryPositionalEmbedding
 from jaxonmodels.transformers.kira.model_args import KiraModelArgs
 
 
@@ -18,7 +17,7 @@ class Block(eqx.nn.StatefulLayer):
 
     model_args: KiraModelArgs = eqx.field(static=True)
 
-    rope_embeddings: RotaryPositionalEmbedding
+    rope_embeddings: eqx.nn.RotaryPositionalEmbedding
 
     def __init__(
         self,
@@ -29,7 +28,7 @@ class Block(eqx.nn.StatefulLayer):
     ):
         self.model_args = model_args
         key, *subkeys = jax.random.split(key, 5)
-        self.rope_embeddings = RotaryPositionalEmbedding(
+        self.rope_embeddings = eqx.nn.RotaryPositionalEmbedding(
             embedding_size=model_args.n_embd,
         )
 

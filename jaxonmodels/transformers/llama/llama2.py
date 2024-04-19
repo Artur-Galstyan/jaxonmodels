@@ -6,7 +6,7 @@ import jax
 from jaxtyping import Array, Bool, Int, PRNGKeyArray
 
 from jaxonmodels.layers.mha import MultiheadAttention
-from jaxonmodels.layers.rope_embeddings import process_heads, RotaryPositionalEmbedding
+from jaxonmodels.layers.rope_embeddings import process_heads
 from jaxonmodels.transformers.llama.model_args import LLaMAModelArgs
 
 
@@ -37,7 +37,7 @@ class FFN(eqx.Module):
 class LLaMABlock(eqx.Module):
     model_args: LLaMAModelArgs
     attention: MultiheadAttention
-    rope: RotaryPositionalEmbedding
+    rope: eqx.nn.RotaryPositionalEmbedding
     attention_norm: eqx.nn.RMSNorm
     ffn_norm: eqx.nn.RMSNorm
     ffn: FFN
@@ -55,7 +55,7 @@ class LLaMABlock(eqx.Module):
             key=attention_key,
         )
 
-        self.rope = RotaryPositionalEmbedding(embedding_size=model_args.head_dim)
+        self.rope = eqx.nn.RotaryPositionalEmbedding(embedding_size=model_args.head_dim)
         self.attention_norm = eqx.nn.RMSNorm(
             shape=model_args.dim, eps=model_args.norm_eps
         )

@@ -20,6 +20,7 @@ dependencies = [
     "fire",
     "wandb",
     "jaxtyping",
+    "sentencepiece"
 ]
 [project.optional-dependencies]
 dev = ["nox", "pre-commit", "pytest", "mkdocs"]

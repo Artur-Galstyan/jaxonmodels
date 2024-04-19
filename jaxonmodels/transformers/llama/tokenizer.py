@@ -26,7 +26,7 @@ class Tokenizer:
         """
         # reload tokenizer
         assert os.path.isfile(model_path), model_path
-        self.sp_model = SentencePieceProcessor(model_file=model_path)
+        self.sp_model = SentencePieceProcessor(model_file=model_path)  # pyright: ignore
         logger.info(f"Reloaded SentencePiece model from {model_path}")
 
         # BOS / EOS token IDs
@@ -37,7 +37,7 @@ class Tokenizer:
         logger.info(
             f"#words: {self.n_words} - BOS ID: {self.bos_id} - EOS ID: {self.eos_id}"
         )
-        assert self.sp_model.vocab_size() == self.sp_model.get_piece_size()
+        assert self.sp_model.vocab_size() == self.sp_model.get_piece_size()  # pyright: ignore
 
     def encode(self, s: str, bos: bool, eos: bool) -> List[int]:
         """
@@ -52,7 +52,7 @@ class Tokenizer:
             List[int]: A list of token IDs.
         """
         assert isinstance(s, str), "Input must be a string."
-        t = self.sp_model.encode(s)
+        t = self.sp_model.encode(s)  # pyright: ignore
         if bos:
             t = [self.bos_id] + t
         if eos:
@@ -69,4 +69,4 @@ class Tokenizer:
         Returns:
             str: The decoded string.
         """
-        return self.sp_model.decode(t)
+        return self.sp_model.decode(t)  # pyright: ignore
