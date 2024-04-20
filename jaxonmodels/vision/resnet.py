@@ -4,6 +4,7 @@ from collections.abc import Callable
 import equinox as eqx
 import jax
 from beartype.typing import Optional, Type, Union
+from equinox.nn import State
 from jaxtyping import Array, PRNGKeyArray, PyTree
 
 
@@ -32,7 +33,6 @@ def conv3x3(
 def conv1x1(
     in_planes: int, out_planes: int, stride: int = 1, *, key: PRNGKeyArray
 ) -> eqx.nn.Conv2d:
-    """1x1 convolution"""
     return eqx.nn.Conv2d(
         in_planes, out_planes, kernel_size=1, stride=stride, use_bias=False, key=key
     )
@@ -86,7 +86,7 @@ class BasicBlock(eqx.Module):
         out, state = self.bn2(out, state)
 
         if self.downsample is not None:
-            identity = self.downsample(x)
+            identity, state = self.downsample(x, state)
 
         out += identity
         out = jax.nn.relu(out)
@@ -123,10 +123,10 @@ class ResNet(eqx.Module):
     avgpool: eqx.nn.AdaptiveAvgPool2d
     fc: eqx.nn.Linear
 
-    layer1: eqx.nn.Sequential
-    layer2: eqx.nn.Sequential
-    layer3: eqx.nn.Sequential
-    layer4: eqx.nn.Sequential
+    layer1: "ResNetLayer"
+    layer2: "ResNetLayer"
+    layer3: "ResNetLayer"
+    layer4: "ResNetLayer"
 
     def __init__(
         self,
@@ -211,9 +211,38 @@ class ResNet(eqx.Module):
         self.avgpool = eqx.nn.AdaptiveAvgPool2d((1, 1))
         self.fc = eqx.nn.Linear(512 * _get_expansion(block), num_classes, key=fc_key)
 
+    def __call__(self, x: Array, state: State) -> tuple[Array, State]:
+        x = self.conv1(x)
+        x, state = self.bn1(x, state)
+        x = jax.nn.relu(x)
+        x = self.maxpool(x)
+
+        x, state = self.layer1(x, state=state)
+        x, state = self.layer2(x, state=state)
+        x, state = self.layer3(x, state=state)
+        x, state = self.layer4(x, state=state)
+
+        x = self.avgpool(x)
+        x = x.reshape(-1)
+        x = self.fc(x)
+
+        return x, state
+
+
+class ResNetLayer(eqx.Module):
+    layers: list[PyTree]
+
+    def __init__(self, layers: list[PyTree]):
+        self.layers = layers
+
+    def __call__(self, x: Array, state: State) -> tuple[Array, State]:
+        for layer in self.layers:
+            x, state = layer(x, state)
+        return x, state
+
 
 def _make_resnet_layer(
-    resnet: "ResNet",
+    resnet: ResNet,
     block: Type[Union[BasicBlock, Bottleneck]],
     planes: int,
     blocks: int,
@@ -222,7 +251,7 @@ def _make_resnet_layer(
     dilate: bool = False,
     *,
     key: PRNGKeyArray,
-) -> eqx.nn.Sequential:
+) -> ResNetLayer:
     downsample = None
     previous_dilation = resnet.dilation
     if dilate:
@@ -256,9 +285,7 @@ def _make_resnet_layer(
             key=layer_keys[0],
         )
     )
-    print(f"Before {resnet.inplanes=}")
     resnet.inplanes = planes * _get_expansion(block)
-    print(f"After {resnet.inplanes=}")
     for i in range(1, blocks):
         layers.append(
             block(
@@ -272,10 +299,14 @@ def _make_resnet_layer(
             )
         )
 
-    return eqx.nn.Sequential(layers)
+    return ResNetLayer(layers=layers)
 
 
 def _get_expansion(
     block: Type[Union[BasicBlock, Bottleneck]],
 ) -> int:
     return 1 if block is BasicBlock else 4
+
+
+def resnet18():
+    pass
