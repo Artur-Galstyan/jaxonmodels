@@ -3,9 +3,24 @@ from collections.abc import Callable
 
 import equinox as eqx
 import jax
+import jax.numpy as jnp
 from beartype.typing import Optional, Type, Union
 from equinox.nn import State
 from jaxtyping import Array, PRNGKeyArray, PyTree
+
+from jaxonmodels.commons.utils import (
+    get_node,
+    pytorch_state_dict_str_to_pytree_str,
+)
+
+
+def _iterate_layers(layer: list[PyTree], x: Array, state: State):
+    for l in layer:
+        if hasattr(l, "is_stateful") and l.is_stateful():
+            x, state = l(x, state)
+        else:
+            x = l(x)
+    return x, state
 
 
 def conv3x3(
@@ -46,7 +61,7 @@ class BasicBlock(eqx.Module):
     bn1: eqx.nn.BatchNorm
     bn2: eqx.nn.BatchNorm
 
-    downsample: Optional[PyTree]
+    downsample: Optional[list[PyTree]]
 
     def __init__(
         self,
@@ -86,15 +101,29 @@ class BasicBlock(eqx.Module):
         out, state = self.bn2(out, state)
 
         if self.downsample is not None:
-            identity, state = self.downsample(x, state)
+            identity, state = _iterate_layers(self.downsample, x, state)
 
         out += identity
         out = jax.nn.relu(out)
 
         return out, state
 
+    def is_stateful(self):
+        return True
+
 
 class Bottleneck(eqx.Module):
+    stride: int = eqx.field(static=True)
+
+    conv1: eqx.nn.Conv2d
+    conv2: eqx.nn.Conv2d
+    conv3: eqx.nn.Conv2d
+    bn1: eqx.nn.BatchNorm
+    bn2: eqx.nn.BatchNorm
+    bn3: eqx.nn.BatchNorm
+
+    downsample: Optional[list[PyTree]]
+
     def __init__(
         self,
         inplanes: int,
@@ -108,7 +137,43 @@ class Bottleneck(eqx.Module):
         *,
         key: PRNGKeyArray,
     ) -> None:
-        pass
+        expansion = 4
+        norm_layer = eqx.nn.BatchNorm if norm_layer is None else norm_layer
+        width = int(planes * (base_width / 64.0)) * groups
+        key, *subkeys = jax.random.split(key, 4)
+        self.conv1 = conv1x1(inplanes, width, key=subkeys[0])
+        self.bn1 = norm_layer(width, axis_name="batch")
+        self.conv2 = conv3x3(width, width, stride, groups, dilation, key=subkeys[1])
+        self.bn2 = norm_layer(width, axis_name="batch")
+        self.conv3 = conv1x1(width, planes * expansion, key=subkeys[2])
+        self.bn3 = norm_layer(planes * expansion, axis_name="batch")
+        self.downsample = downsample
+        self.stride = stride
+
+        def __call__(self, x: Array, state: State) -> tuple[Array, State]:
+            identity = x
+
+            out = self.conv1(x)
+            out, state = self.bn1(out, state)
+            out = self.relu(out)
+
+            out = self.conv2(out)
+            out, state = self.bn2(out, state)
+            out = jax.nn.relu(out)
+
+            out = self.conv3(out)
+            out, state = self.bn3(out, state)
+
+            if self.downsample is not None:
+                identity, state = _iterate_layers(self.downsample, x, state)
+
+            out += identity
+            out = jax.nn.relu(out)
+
+            return out, state
+
+    def is_stateful(self):
+        return True
 
 
 class ResNet(eqx.Module):
@@ -123,10 +188,10 @@ class ResNet(eqx.Module):
     avgpool: eqx.nn.AdaptiveAvgPool2d
     fc: eqx.nn.Linear
 
-    layer1: "ResNetLayer"
-    layer2: "ResNetLayer"
-    layer3: "ResNetLayer"
-    layer4: "ResNetLayer"
+    layer1: list[PyTree]
+    layer2: list[PyTree]
+    layer3: list[PyTree]
+    layer4: list[PyTree]
 
     def __init__(
         self,
@@ -217,27 +282,15 @@ class ResNet(eqx.Module):
         x = jax.nn.relu(x)
         x = self.maxpool(x)
 
-        x, state = self.layer1(x, state=state)
-        x, state = self.layer2(x, state=state)
-        x, state = self.layer3(x, state=state)
-        x, state = self.layer4(x, state=state)
+        x, state = _iterate_layers(self.layer1, x, state)
+        x, state = _iterate_layers(self.layer2, x, state)
+        x, state = _iterate_layers(self.layer3, x, state)
+        x, state = _iterate_layers(self.layer4, x, state)
 
         x = self.avgpool(x)
         x = x.reshape(-1)
         x = self.fc(x)
 
-        return x, state
-
-
-class ResNetLayer(eqx.Module):
-    layers: list[PyTree]
-
-    def __init__(self, layers: list[PyTree]):
-        self.layers = layers
-
-    def __call__(self, x: Array, state: State) -> tuple[Array, State]:
-        for layer in self.layers:
-            x, state = layer(x, state)
         return x, state
 
 
@@ -251,7 +304,7 @@ def _make_resnet_layer(
     dilate: bool = False,
     *,
     key: PRNGKeyArray,
-) -> ResNetLayer:
+) -> list[PyTree]:
     downsample = None
     previous_dilation = resnet.dilation
     if dilate:
@@ -259,17 +312,15 @@ def _make_resnet_layer(
         stride = 1
     key, downsample_key = jax.random.split(key)
     if stride != 1 or resnet.inplanes != planes * _get_expansion(block):
-        downsample = eqx.nn.Sequential(
-            layers=[
-                conv1x1(
-                    resnet.inplanes,
-                    planes * _get_expansion(block),
-                    stride,
-                    key=downsample_key,
-                ),
-                norm_layer(planes * _get_expansion(block)),
-            ]
-        )
+        downsample = [
+            conv1x1(
+                resnet.inplanes,
+                planes * _get_expansion(block),
+                stride,
+                key=downsample_key,
+            ),
+            norm_layer(planes * _get_expansion(block)),
+        ]
     key, *layer_keys = jax.random.split(key, blocks + 1)
     layers = []
     layers.append(
@@ -299,7 +350,7 @@ def _make_resnet_layer(
             )
         )
 
-    return ResNetLayer(layers=layers)
+    return layers
 
 
 def _get_expansion(
@@ -308,5 +359,26 @@ def _get_expansion(
     return 1 if block is BasicBlock else 4
 
 
-def resnet18():
-    pass
+def resnet18(
+    key: Optional[PRNGKeyArray] = None,
+    load_weights: bool = False,
+    target_dir: Optional[str] = None,
+) -> tuple[ResNet, State]:
+    key = jax.random.PRNGKey(22) if key is None else key
+    resnet, state = eqx.nn.make_with_state(ResNet)(BasicBlock, [2, 2, 2, 2], key=key)
+    if load_weights:
+        from torchvision.models import resnet18, ResNet18_Weights
+
+        state_dict = resnet18(weights=ResNet18_Weights.DEFAULT).state_dict()
+
+        for k in state_dict:
+            pytree_string = pytorch_state_dict_str_to_pytree_str(k)
+            where = ft.partial(get_node, targets=pytree_string.split(".")[1:])
+            if where(resnet) is not None:
+                resnet = eqx.tree_at(where, resnet, jnp.array(state_dict[k].numpy()))
+    return resnet, state
+
+
+def resnet50(key: Optional[PRNGKeyArray] = None) -> tuple[ResNet, State]:
+    key = jax.random.PRNGKey(22) if key is None else key
+    return eqx.nn.make_with_state(ResNet)(Bottleneck, [3, 4, 6, 3], key=key)
