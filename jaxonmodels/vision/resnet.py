@@ -1,26 +1,10 @@
-import functools as ft
 from collections.abc import Callable
 
 import equinox as eqx
 import jax
-import jax.numpy as jnp
 from beartype.typing import Optional, Type, Union
-from equinox.nn import State
+from equinox.nn import BatchNorm, State
 from jaxtyping import Array, PRNGKeyArray, PyTree
-
-from jaxonmodels.commons.utils import (
-    get_node,
-    pytorch_state_dict_str_to_pytree_str,
-)
-
-
-def _iterate_layers(layer: list[PyTree], x: Array, state: State):
-    for l in layer:
-        if hasattr(l, "is_stateful") and l.is_stateful():
-            x, state = l(x, state)
-        else:
-            x = l(x)
-    return x, state
 
 
 def conv3x3(
@@ -53,6 +37,22 @@ def conv1x1(
     )
 
 
+class DownsampleBlock(eqx.Module):
+    conv: eqx.nn.Conv2d
+    norm: eqx.nn.BatchNorm
+
+    def __init__(
+        self, in_planes: int, out_planes: int, stride: int, *, key: PRNGKeyArray
+    ):
+        self.conv = conv1x1(in_planes, out_planes, stride, key=key)
+        self.norm = BatchNorm(out_planes, axis_name="batch")
+
+    def __call__(self, x: Array, state: State) -> tuple[Array, State]:
+        x = self.conv(x)
+        x, state = self.norm(x, state)
+        return x, state
+
+
 class BasicBlock(eqx.Module):
     stride: int = eqx.field(static=True)
 
@@ -61,32 +61,38 @@ class BasicBlock(eqx.Module):
     bn1: eqx.nn.BatchNorm
     bn2: eqx.nn.BatchNorm
 
-    downsample: Optional[list[PyTree]]
+    downsample: Optional[DownsampleBlock]
 
     def __init__(
         self,
         inplanes: int,
         planes: int,
         stride: int = 1,
-        downsample: Optional[PyTree] = None,
+        downsample: Optional[DownsampleBlock] = None,
         groups: int = 1,
         base_width: int = 64,
         dilation: int = 1,
-        norm_layer: Optional[Callable[..., PyTree]] = None,
         *,
         key: PRNGKeyArray,
     ) -> None:
-        if norm_layer is None:
-            norm_layer = eqx.nn.BatchNorm
+        # print(
+        #     f"{inplanes=}",
+        #     f"{planes=}",
+        #     f"{stride=}",
+        #     f"{downsample=}",
+        #     f"{groups=}",
+        #     f"{base_width=}",
+        #     f"{dilation=}",
+        # )
         if groups != 1 or base_width != 64:
             raise ValueError("BasicBlock only supports groups=1 and base_width=64")
         if dilation > 1:
             raise NotImplementedError("Dilation > 1 not supported in BasicBlock")
         key, conv1_key, conv2_key = jax.random.split(key, 3)
         self.conv1 = conv3x3(inplanes, planes, stride, key=conv1_key)
-        self.bn1 = norm_layer(planes, axis_name="batch")
+        self.bn1 = eqx.nn.BatchNorm(planes, axis_name="batch")
         self.conv2 = conv3x3(planes, planes, key=conv2_key)
-        self.bn2 = norm_layer(planes, axis_name="batch")
+        self.bn2 = eqx.nn.BatchNorm(planes, axis_name="batch")
         self.downsample = downsample
         self.stride = stride
 
@@ -101,15 +107,12 @@ class BasicBlock(eqx.Module):
         out, state = self.bn2(out, state)
 
         if self.downsample is not None:
-            identity, state = _iterate_layers(self.downsample, x, state)
+            identity, state = self.downsample(x, state)
 
         out += identity
         out = jax.nn.relu(out)
 
         return out, state
-
-    def is_stateful(self):
-        return True
 
 
 class Bottleneck(eqx.Module):
@@ -122,14 +125,14 @@ class Bottleneck(eqx.Module):
     bn2: eqx.nn.BatchNorm
     bn3: eqx.nn.BatchNorm
 
-    downsample: Optional[list[PyTree]]
+    downsample: Optional[DownsampleBlock]
 
     def __init__(
         self,
         inplanes: int,
         planes: int,
         stride: int = 1,
-        downsample: Optional[PyTree] = None,
+        downsample: Optional[DownsampleBlock] = None,
         groups: int = 1,
         base_width: int = 64,
         dilation: int = 1,
@@ -150,30 +153,87 @@ class Bottleneck(eqx.Module):
         self.downsample = downsample
         self.stride = stride
 
-        def __call__(self, x: Array, state: State) -> tuple[Array, State]:
-            identity = x
+    def __call__(self, x: Array, state: State) -> tuple[Array, State]:
+        identity = x
 
-            out = self.conv1(x)
-            out, state = self.bn1(out, state)
-            out = self.relu(out)
+        out = self.conv1(x)
+        out, state = self.bn1(out, state)
+        out = jax.nn.relu(out)
 
-            out = self.conv2(out)
-            out, state = self.bn2(out, state)
-            out = jax.nn.relu(out)
+        out = self.conv2(out)
+        out, state = self.bn2(out, state)
+        out = jax.nn.relu(out)
 
-            out = self.conv3(out)
-            out, state = self.bn3(out, state)
+        out = self.conv3(out)
+        out, state = self.bn3(out, state)
 
-            if self.downsample is not None:
-                identity, state = _iterate_layers(self.downsample, x, state)
+        if self.downsample is not None:
+            identity, state = self.downsample(x, state)
 
-            out += identity
-            out = jax.nn.relu(out)
+        out += identity
+        out = jax.nn.relu(out)
 
-            return out, state
+        return out, state
 
-    def is_stateful(self):
-        return True
+
+class ResNetLayer(eqx.Module):
+    blocks: list[BasicBlock | Bottleneck]
+
+    def __init__(
+        self,
+        block: Type[BasicBlock | Bottleneck],
+        blocks: int,
+        in_planes: int,
+        out_planes: int,
+        groups: int,
+        base_width: int,
+        stride: int,
+        dilation: int,
+        *,
+        key: PRNGKeyArray,
+    ):
+        key, downsample_key = jax.random.split(key)
+        if stride != 1 or in_planes != out_planes * _get_expansion(block):
+            downsample = DownsampleBlock(
+                in_planes,
+                out_planes * _get_expansion(block),
+                stride,
+                key=downsample_key,
+            )
+        else:
+            downsample = None
+
+        key, *layer_keys = jax.random.split(key, blocks + 1)
+        layers = []
+        layers.append(
+            block(
+                in_planes,
+                out_planes,
+                stride,
+                downsample,
+                groups,
+                base_width,
+                dilation,
+                key=layer_keys[0],
+            )
+        )
+        for i in range(1, blocks):
+            layers.append(
+                block(
+                    out_planes * _get_expansion(block),
+                    out_planes,
+                    groups=groups,
+                    base_width=base_width,
+                    dilation=dilation,
+                    key=layer_keys[i],
+                )
+            )
+        self.blocks = layers
+
+    def __call__(self, x: Array, state: State) -> tuple[Array, State]:
+        for block in self.blocks:
+            x, state = block(x, state)
+        return x, state
 
 
 class ResNet(eqx.Module):
@@ -188,10 +248,10 @@ class ResNet(eqx.Module):
     avgpool: eqx.nn.AdaptiveAvgPool2d
     fc: eqx.nn.Linear
 
-    layer1: list[PyTree]
-    layer2: list[PyTree]
-    layer3: list[PyTree]
-    layer4: list[PyTree]
+    layer1: ResNetLayer
+    layer2: ResNetLayer
+    layer3: ResNetLayer
+    layer4: ResNetLayer
 
     def __init__(
         self,
@@ -201,8 +261,7 @@ class ResNet(eqx.Module):
         zero_init_residual: bool = False,
         groups: int = 1,
         width_per_group: int = 64,
-        replace_stride_with_dilation: Optional[list[bool]] = None,
-        norm_layer: Optional[Callable[..., PyTree]] = None,
+        replace_stride_with_dilation: list[bool] = [False, False, False],
         *,
         key: PRNGKeyArray,
     ) -> None:
@@ -211,8 +270,6 @@ class ResNet(eqx.Module):
         self.groups = groups
         self.base_width = width_per_group
 
-        if replace_stride_with_dilation is None:
-            replace_stride_with_dilation = [False, False, False]
         if len(replace_stride_with_dilation) != 3:
             raise ValueError(
                 "replace_stride_with_dilation should be None "
@@ -232,47 +289,71 @@ class ResNet(eqx.Module):
             key=key,
         )
 
-        norm_layer = (
-            ft.partial(eqx.nn.BatchNorm, axis_name="batch")
-            if norm_layer is None
-            else norm_layer
-        )
-        self.bn1 = norm_layer(self.inplanes)
+        self.bn1 = eqx.nn.BatchNorm(self.inplanes, axis_name="batch")
         self.maxpool = eqx.nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
-        self.layer1 = _make_resnet_layer(
-            self, block, self.inplanes, 4, norm_layer=norm_layer, key=layer1_key
+
+        planes = [64, 128, 256, 512]
+        strides = [1, 2, 2, 2]
+        for i in range(1, 4):
+            if replace_stride_with_dilation[i - 1]:
+                strides[i] = 1
+        in_planes = [64, 64, 128, 256]
+        in_planes = [i * _get_expansion(block) for i in in_planes]
+        dilations = []
+        for stride, dilate in zip(strides, replace_stride_with_dilation + [False]):
+            if dilate:
+                dilations.append(self.dilation * stride)
+            else:
+                dilations.append(self.dilation)
+
+        self.layer1 = ResNetLayer(
+            block,
+            layers[0],
+            in_planes[0],
+            planes[0],
+            groups,
+            width_per_group,
+            strides[0],
+            dilations[0],
+            key=layer1_key,
         )
 
-        self.layer2 = _make_resnet_layer(
-            self,
+        self.layer2 = ResNetLayer(
             block,
-            128,
             layers[1],
-            norm_layer,
-            stride=2,
-            dilate=replace_stride_with_dilation[0],
+            in_planes[1],
+            planes[1],
+            groups,
+            width_per_group,
+            strides[1],
+            dilations[1],
             key=layer2_key,
         )
-        self.layer3 = _make_resnet_layer(
-            self,
+
+        self.layer3 = ResNetLayer(
             block,
-            256,
             layers[2],
-            norm_layer,
-            stride=2,
-            dilate=replace_stride_with_dilation[1],
+            in_planes[2],
+            planes[2],
+            groups,
+            width_per_group,
+            strides[2],
+            dilations[2],
             key=layer3_key,
         )
-        self.layer4 = _make_resnet_layer(
-            self,
+
+        self.layer4 = ResNetLayer(
             block,
-            512,
             layers[3],
-            norm_layer,
-            stride=2,
-            dilate=replace_stride_with_dilation[2],
+            in_planes[3],
+            planes[3],
+            groups,
+            width_per_group,
+            strides[3],
+            dilations[3],
             key=layer4_key,
         )
+
         self.avgpool = eqx.nn.AdaptiveAvgPool2d((1, 1))
         self.fc = eqx.nn.Linear(512 * _get_expansion(block), num_classes, key=fc_key)
 
@@ -282,75 +363,16 @@ class ResNet(eqx.Module):
         x = jax.nn.relu(x)
         x = self.maxpool(x)
 
-        x, state = _iterate_layers(self.layer1, x, state)
-        x, state = _iterate_layers(self.layer2, x, state)
-        x, state = _iterate_layers(self.layer3, x, state)
-        x, state = _iterate_layers(self.layer4, x, state)
+        x, state = self.layer1(x, state)
+        x, state = self.layer2(x, state)
+        x, state = self.layer3(x, state)
+        x, state = self.layer4(x, state)
 
         x = self.avgpool(x)
         x = x.reshape(-1)
         x = self.fc(x)
 
         return x, state
-
-
-def _make_resnet_layer(
-    resnet: ResNet,
-    block: Type[Union[BasicBlock, Bottleneck]],
-    planes: int,
-    blocks: int,
-    norm_layer: Callable[..., PyTree],
-    stride: int = 1,
-    dilate: bool = False,
-    *,
-    key: PRNGKeyArray,
-) -> list[PyTree]:
-    downsample = None
-    previous_dilation = resnet.dilation
-    if dilate:
-        resnet.dilation *= stride
-        stride = 1
-    key, downsample_key = jax.random.split(key)
-    if stride != 1 or resnet.inplanes != planes * _get_expansion(block):
-        downsample = [
-            conv1x1(
-                resnet.inplanes,
-                planes * _get_expansion(block),
-                stride,
-                key=downsample_key,
-            ),
-            norm_layer(planes * _get_expansion(block)),
-        ]
-    key, *layer_keys = jax.random.split(key, blocks + 1)
-    layers = []
-    layers.append(
-        block(
-            resnet.inplanes,
-            planes,
-            stride,
-            downsample,
-            resnet.groups,
-            resnet.base_width,
-            previous_dilation,
-            norm_layer,
-            key=layer_keys[0],
-        )
-    )
-    resnet.inplanes = planes * _get_expansion(block)
-    for i in range(1, blocks):
-        layers.append(
-            block(
-                resnet.inplanes,
-                planes,
-                groups=resnet.groups,
-                base_width=resnet.base_width,
-                dilation=resnet.dilation,
-                norm_layer=norm_layer,
-                key=layer_keys[i],
-            )
-        )
-
-    return layers
 
 
 def _get_expansion(
@@ -361,21 +383,9 @@ def _get_expansion(
 
 def resnet18(
     key: Optional[PRNGKeyArray] = None,
-    load_weights: bool = False,
-    target_dir: Optional[str] = None,
 ) -> tuple[ResNet, State]:
     key = jax.random.PRNGKey(22) if key is None else key
     resnet, state = eqx.nn.make_with_state(ResNet)(BasicBlock, [2, 2, 2, 2], key=key)
-    if load_weights:
-        from torchvision.models import resnet18, ResNet18_Weights
-
-        state_dict = resnet18(weights=ResNet18_Weights.DEFAULT).state_dict()
-
-        for k in state_dict:
-            pytree_string = pytorch_state_dict_str_to_pytree_str(k)
-            where = ft.partial(get_node, targets=pytree_string.split(".")[1:])
-            if where(resnet) is not None:
-                resnet = eqx.tree_at(where, resnet, jnp.array(state_dict[k].numpy()))
     return resnet, state
 
 
