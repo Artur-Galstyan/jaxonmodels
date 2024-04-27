@@ -75,15 +75,6 @@ class BasicBlock(eqx.Module):
         *,
         key: PRNGKeyArray,
     ) -> None:
-        # print(
-        #     f"{inplanes=}",
-        #     f"{planes=}",
-        #     f"{stride=}",
-        #     f"{downsample=}",
-        #     f"{groups=}",
-        #     f"{base_width=}",
-        #     f"{dilation=}",
-        # )
         if groups != 1 or base_width != 64:
             raise ValueError("BasicBlock only supports groups=1 and base_width=64")
         if dilation > 1:
@@ -381,11 +372,11 @@ def _get_expansion(
     return 1 if block is BasicBlock else 4
 
 
-def resnet18(
-    key: Optional[PRNGKeyArray] = None,
-) -> tuple[ResNet, State]:
+def resnet18(key: Optional[PRNGKeyArray] = None, **kwargs) -> tuple[ResNet, State]:
     key = jax.random.PRNGKey(22) if key is None else key
-    resnet, state = eqx.nn.make_with_state(ResNet)(BasicBlock, [2, 2, 2, 2], key=key)
+    resnet, state = eqx.nn.make_with_state(ResNet)(
+        BasicBlock, [2, 2, 2, 2], **kwargs, key=key
+    )
     return resnet, state
 
 

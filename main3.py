@@ -1,6 +1,8 @@
 import json
 import urllib.request
 
+import equinox as eqx
+import jax.numpy as jnp
 import torch
 from jaxonmodels.vision.resnet import resnet18 as resnet18_jax
 from PIL import Image
@@ -21,12 +23,13 @@ transform = transforms.Compose(
 )
 img = Image.open(img_name)
 img_t = transform(img)
+print(img_t.shape)  # pyright: ignore
 batch_t = torch.unsqueeze(img_t, 0)  # pyright:ignore
 
 # Predict
 with torch.no_grad():
     output = resnet(batch_t)
-    print(output.shape)
+    print(output.shape)  # pyright: ignore
     _, predicted = torch.max(output, 1)
 
 print(
@@ -42,4 +45,12 @@ label = imagenet_labels[str(predicted.item())][1]
 print(f"Label for index {predicted.item()}: {label}")
 
 
-jax_resnet = resnet18_jax()
+jax_resnet, state = resnet18_jax()
+jax_batch = jnp.array(batch_t.numpy())
+out, state = eqx.filter_vmap(
+    jax_resnet, in_axes=(0, None), out_axes=(0, None), axis_name="batch"
+)(jax_batch, state)
+print(f"{out.shape}")
+
+label = imagenet_labels[str(jnp.argmax(out))][1]
+print(f"Label for index {jnp.argmax(out)}: {label}")
