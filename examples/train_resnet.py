@@ -2,13 +2,14 @@ import functools as ft
 import os
 
 import equinox as eqx
+import jax
 import jax.numpy as jnp
 import numpy as np
 import optax
 import tensorflow as tf
 from datasets import load_dataset
 from jaxonloader import DataTargetDataset, JaxonDataLoader
-from jaxonmodels.vision.resnet import ResNet, resnet18
+from jaxonmodels.vision.resnet import ResNet, resnet50
 from jaxtyping import Array, PyTree
 from tqdm import tqdm
 
@@ -17,25 +18,8 @@ named_batch_vmap = ft.partial(
     eqx.filter_vmap, in_axes=(0, None), out_axes=(0, None), axis_name="batch"
 )
 
-# dataset = load_dataset(
-#     "imagenet-1k", streaming=True, trust_remote_code=True, split="train"
-# )
-
 dataset = load_dataset("cifar10", split="train")
 dataset = dataset.to_iterable_dataset()  # pyright: ignore
-
-# def preprocess_image(training_sample: dict) -> tuple[np.ndarray, int]:
-#     resized_image = training_sample["image"].resize((256, 256))  # Resize to 256x256
-#     cropped_image = resized_image.crop((16, 16, 240, 240))  # Center crop to 224x224
-#     image_array = np.array(cropped_image)  # Convert to numpy array
-#
-#     normalized_image = (image_array / 255.0 - [0.485, 0.456, 0.406]) / [
-#         0.229,
-#         0.224,
-#         0.225,
-#     ]  # Normalize
-#
-#     return normalized_image, training_sample["label"]
 
 
 def augment(img, label):
@@ -49,6 +33,7 @@ def augment(img, label):
     image = tf.image.random_saturation(image, 0.8, 1.2)
     image = np.array(image, dtype=np.float32)
     image = image.transpose(2, 0, 1)
+    image = image / 255.0
     return image, label
 
 
@@ -123,14 +108,14 @@ def eval(model: PyTree, state: eqx.nn.State, test_dataloader: JaxonDataLoader):
     return jnp.mean(jnp.array(avg_accuracy)), state
 
 
-model, state = resnet18(num_classes=10)
-optimizer = optax.adam(lr_schedule)
+model, state = resnet50(num_classes=10, key=jax.random.PRNGKey(42))
+optimizer = optax.adamw(lr_schedule)
 opt_state = optimizer.init(eqx.filter(model, eqx.is_array))
 
 for epoch in range(N_EPOCHS):
     avg_loss = []
 
-    for x, y in tqdm(train_loader):
+    for x, y in tqdm(train_loader, ascii=True):
         x, y = jnp.array(x), jnp.array(y)
         model, opt_state, loss, state = step(model, state, x, y, optimizer, opt_state)
         avg_loss.append(loss)

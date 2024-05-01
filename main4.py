@@ -1,17 +1,16 @@
-import json
-import urllib.request
-
 import equinox as eqx
+import jax
 import jax.numpy as jnp
 import torch
-from jaxonmodels.vision.resnet import resnet18 as resnet18_jax
+from jaxonmodels.vision.resnet import resnet50 as resnet50_jax
 from PIL import Image
 from torchvision import transforms
-from torchvision.models import resnet18
+from torchvision.models import resnet50
 
 
 img_name = "doggo.jpeg"
-resnet = resnet18(weights=None)
+resnet = resnet50(weights=None)
+# resnet = resnet18(weights=None)
 
 transform = transforms.Compose(
     [
@@ -37,20 +36,21 @@ print(
 )  # Outputs the ImageNet class index of the prediction
 
 # Load ImageNet labels
-url = "https://storage.googleapis.com/download.tensorflow.org/data/imagenet_class_index.json"
-with urllib.request.urlopen(url) as url:
-    imagenet_labels = json.loads(url.read().decode())
+# url = "https://storage.googleapis.com/download.tensorflow.org/data/imagenet_class_index.json"
+# with urllib.request.urlopen(url) as url:
+#     imagenet_labels = json.loads(url.read().decode())
+#
+# label = imagenet_labels[str(predicted.item())][1]
+# print(f"Label for index {predicted.item()}: {label}")
 
-label = imagenet_labels[str(predicted.item())][1]
-print(f"Label for index {predicted.item()}: {label}")
 
-
-jax_resnet, state = resnet18_jax()
+# jax_resnet, state = resnet18_jax()
+jax_resnet, state = resnet50_jax(key=jax.random.PRNGKey(22))
 jax_batch = jnp.array(batch_t.numpy())
 out, state = eqx.filter_vmap(
     jax_resnet, in_axes=(0, None), out_axes=(0, None), axis_name="batch"
 )(jax_batch, state)
 print(f"{out.shape}")
 
-label = imagenet_labels[str(jnp.argmax(out))][1]
-print(f"Label for index {jnp.argmax(out)}: {label}")
+# label = imagenet_labels[str(jnp.argmax(out))][1]
+# print(f"Label for index {jnp.argmax(out)}: {label}")

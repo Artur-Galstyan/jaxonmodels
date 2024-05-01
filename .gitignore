@@ -162,3 +162,6 @@ cython_debug/
 testing_ground/
 
 .DS_Store
+
+cifar10_data.npy
+cifar10_labels.npy
