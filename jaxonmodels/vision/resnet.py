@@ -51,6 +51,12 @@ class Downsample(eqx.Module):
 
 
 class BasicBlock(eqx.Module):
+    conv1: eqx.nn.Conv2d
+    conv2: eqx.nn.Conv2d
+    bn1: eqx.nn.BatchNorm
+    bn2: eqx.nn.BatchNorm
+    downsample: Optional[Downsample]
+
     def __init__(
         self,
         in_channels: int,
@@ -62,10 +68,32 @@ class BasicBlock(eqx.Module):
         *,
         key: PRNGKeyArray,
     ):
-        pass
+        if groups != 1 or base_width != 64:
+            raise ValueError("BasicBlock only supports groups=1 and base_width=64")
+        key, conv1_key, conv2_key = jax.random.split(key, 3)
+        self.conv1 = conv3x3(in_channels, out_channels, stride, key=conv1_key)
+        self.bn1 = eqx.nn.BatchNorm(out_channels, axis_name="batch")
+        self.conv2 = conv3x3(out_channels, out_channels, key=conv2_key)
+        self.bn2 = eqx.nn.BatchNorm(out_channels, axis_name="batch")
+        self.downsample = downsample
 
     def __call__(self, x: Array, state: State) -> tuple[Array, State]:
-        return x, state
+        identity = x
+
+        out = self.conv1(x)
+        out, state = self.bn1(out, state)
+        out = jax.nn.relu(out)
+
+        out = self.conv2(out)
+        out, state = self.bn2(out, state)
+
+        if self.downsample is not None:
+            identity, state = self.downsample(x, state)
+
+        out += identity
+        out = jax.nn.relu(out)
+
+        return out, state
 
 
 class Bottleneck(eqx.Module):
@@ -285,6 +313,15 @@ def _get_expansion(block_type: Type[Bottleneck | BasicBlock]) -> int:
         return 4
     else:
         return 1
+
+
+def resnet18(
+    image_channels: int = 3, num_classes: int = 1000, *, key: PRNGKeyArray, **kwargs
+):
+    layers = [2, 2, 2, 2]
+    return eqx.nn.make_with_state(ResNet)(
+        BasicBlock, layers, image_channels, num_classes, **kwargs, key=key
+    )
 
 
 def resnet50(
