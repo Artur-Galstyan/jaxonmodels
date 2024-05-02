@@ -14,7 +14,6 @@ class MambaModelArgs:
     pad_vocab_size_multiple: int = 8
     conv_bias: bool = True
     bias: bool = False
-    max_seq_len: int = 8
     d_inner: int | None = None
     use_in_projection_bias: bool = True
     use_conv_bias: bool = True
