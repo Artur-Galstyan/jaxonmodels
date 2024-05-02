@@ -9,7 +9,7 @@ import optax
 import tensorflow as tf
 from datasets import load_dataset
 from jaxonloader import DataTargetDataset, JaxonDataLoader
-from jaxonmodels.vision.resnet import ResNet, resnet50
+from jaxonmodels.vision.resnet import ResNet, resnet18
 from jaxtyping import Array, PyTree
 from tqdm import tqdm
 
@@ -98,6 +98,7 @@ lr_schedule = optax.linear_onecycle_schedule(N_EPOCHS * len(train_loader), PEAK_
 
 
 def eval(model: PyTree, state: eqx.nn.State, test_dataloader: JaxonDataLoader):
+    top_3_accuracy = []
     avg_accuracy = []
     eval_model = eqx.nn.inference_mode(model)
     for x, y in test_dataloader:
@@ -105,10 +106,14 @@ def eval(model: PyTree, state: eqx.nn.State, test_dataloader: JaxonDataLoader):
         out, state = named_batch_vmap(eval_model)(x, state)
         accuracy = jnp.mean(jnp.argmax(out, axis=1) == y)
         avg_accuracy.append(accuracy)
+        top3_indices = jnp.argsort(out, axis=1)[:, -3:]
+        is_target_in_top3 = jnp.array([y[i] in top3_indices[i] for i in range(len(y))])
+        top_3_accuracy.append(jnp.mean(is_target_in_top3))
+    print(f"Top 3 accuracy: {jnp.mean(jnp.array(top_3_accuracy))}")
     return jnp.mean(jnp.array(avg_accuracy)), state
 
 
-model, state = resnet50(num_classes=10, key=jax.random.PRNGKey(42))
+model, state = resnet18(num_classes=10, key=jax.random.PRNGKey(42))
 optimizer = optax.adamw(lr_schedule)
 opt_state = optimizer.init(eqx.filter(model, eqx.is_array))
 
