@@ -184,7 +184,6 @@ class ResNet(eqx.Module):
         layers: list[int],
         image_channels: int = 3,
         num_classes: int = 1000,
-        zero_init_residual: bool = False,
         groups: int = 1,
         width_per_group: int = 64,
         *,
