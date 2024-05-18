@@ -4,6 +4,8 @@ from beartype.typing import Optional, Type
 from equinox.nn import State
 from jaxtyping import Array, PRNGKeyArray
 
+from jaxonmodels.utils.boto_client import BotoClient, download
+
 
 def conv3x3(
     in_channels: int,
@@ -52,8 +54,8 @@ class Downsample(eqx.Module):
 
 class BasicBlock(eqx.Module):
     conv1: eqx.nn.Conv2d
-    conv2: eqx.nn.Conv2d
     bn1: eqx.nn.BatchNorm
+    conv2: eqx.nn.Conv2d
     bn2: eqx.nn.BatchNorm
     downsample: Optional[Downsample]
 
@@ -98,11 +100,10 @@ class BasicBlock(eqx.Module):
 
 class Bottleneck(eqx.Module):
     conv1: eqx.nn.Conv2d
-    conv2: eqx.nn.Conv2d
-    conv3: eqx.nn.Conv2d
-
     bn1: eqx.nn.BatchNorm
+    conv2: eqx.nn.Conv2d
     bn2: eqx.nn.BatchNorm
+    conv3: eqx.nn.Conv2d
     bn3: eqx.nn.BatchNorm
 
     downsample: Optional[Downsample]
@@ -315,45 +316,104 @@ def _get_expansion(block_type: Type[Bottleneck | BasicBlock]) -> int:
 
 
 def resnet18(
-    image_channels: int = 3, num_classes: int = 1000, *, key: PRNGKeyArray, **kwargs
-):
+    image_channels: int = 3,
+    num_classes: int = 1000,
+    with_weights: bool = False,
+    target_path_for_weights: Optional[str] = None,
+    *,
+    key: PRNGKeyArray,
+    **kwargs,
+) -> tuple[ResNet, eqx.nn.State]:
     layers = [2, 2, 2, 2]
-    return eqx.nn.make_with_state(ResNet)(
+    model, state = eqx.nn.make_with_state(ResNet)(
         BasicBlock, layers, image_channels, num_classes, **kwargs, key=key
     )
+    if with_weights:
+        object_key = "resnet18.eqx"
+        model, state = _load(object_key, target_path_for_weights, model, state)
+    return model, state
 
 
 def resnet34(
-    image_channels: int = 3, num_classes: int = 1000, *, key: PRNGKeyArray, **kwargs
+    image_channels: int = 3,
+    num_classes: int = 1000,
+    with_weights: bool = False,
+    target_path_for_weights: Optional[str] = None,
+    *,
+    key: PRNGKeyArray,
+    **kwargs,
 ):
     layers = [3, 4, 6, 3]
-    return eqx.nn.make_with_state(ResNet)(
+    model, state = eqx.nn.make_with_state(ResNet)(
         BasicBlock, layers, image_channels, num_classes, **kwargs, key=key
     )
 
+    if with_weights:
+        object_key = "resnet34.eqx"
+        model, state = _load(object_key, target_path_for_weights, model, state)
+    return model, state
+
 
 def resnet50(
-    image_channels: int = 3, num_classes: int = 1000, *, key: PRNGKeyArray, **kwargs
+    image_channels: int = 3,
+    num_classes: int = 1000,
+    with_weights: bool = False,
+    target_path_for_weights: Optional[str] = None,
+    *,
+    key: PRNGKeyArray,
+    **kwargs,
 ):
     layers = [3, 4, 6, 4]
-    return eqx.nn.make_with_state(ResNet)(
+    model, state = eqx.nn.make_with_state(ResNet)(
         Bottleneck, layers, image_channels, num_classes, **kwargs, key=key
     )
+    if with_weights:
+        object_key = "resnet50.eqx"
+        model, state = _load(object_key, target_path_for_weights, model, state)
+    return model, state
 
 
 def resnet101(
-    image_channels: int = 3, num_classes: int = 1000, *, key: PRNGKeyArray, **kwargs
+    image_channels: int = 3,
+    num_classes: int = 1000,
+    with_weights: bool = False,
+    target_path_for_weights: Optional[str] = None,
+    *,
+    key: PRNGKeyArray,
+    **kwargs,
 ):
     layers = [3, 4, 23, 3]
-    return eqx.nn.make_with_state(ResNet)(
+    model, state = eqx.nn.make_with_state(ResNet)(
         Bottleneck, layers, image_channels, num_classes, **kwargs, key=key
     )
+
+    if with_weights:
+        object_key = "resnet101.eqx"
+        model, state = _load(object_key, target_path_for_weights, model, state)
+    return model, state
 
 
 def resnet152(
-    image_channels: int = 3, num_classes: int = 1000, *, key: PRNGKeyArray, **kwargs
+    image_channels: int = 3,
+    num_classes: int = 1000,
+    with_weights: bool = False,
+    target_path_for_weights: Optional[str] = None,
+    *,
+    key: PRNGKeyArray,
+    **kwargs,
 ):
     layers = [3, 8, 36, 3]
-    return eqx.nn.make_with_state(ResNet)(
+    model, state = eqx.nn.make_with_state(ResNet)(
         Bottleneck, layers, image_channels, num_classes, **kwargs, key=key
     )
+
+    if with_weights:
+        object_key = "resnet152.eqx"
+        model, state = _load(object_key, target_path_for_weights, model, state)
+    return model, state
+
+
+def _load(object_key, target_path_for_weights, model, state):
+    path = download(object_key, target_path_for_weights, BotoClient.get())
+    model, state = eqx.tree_deserialise_leaves(path, (model, state))
+    return model, state
