@@ -56,7 +56,7 @@ class LLaMABlock(eqx.Module):
         )
 
         self.rope = eqx.nn.RotaryPositionalEmbedding(
-            embedding_size=model_args.head_dim, rope_theta=model_args.rope_theta
+            embedding_size=model_args.head_dim, theta=model_args.rope_theta
         )
         self.attention_norm = eqx.nn.RMSNorm(
             shape=model_args.dim, eps=model_args.norm_eps

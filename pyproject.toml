@@ -1,6 +1,6 @@
 [project]
 name = "jaxonmodels"
-version = "0.1.4"
+version = "0.1.5"
 description = "JAX models for deep learning"
 readme = "README.md"
 requires-python = "~=3.10"
@@ -8,7 +8,7 @@ license = { file = "LICENSE" }
 authors = [{ name = "Artur A. Galstyan", email = "mail@arturgalstyan.dev" }]
 dependencies = [
     "jax",
-    "equinox>=0.11.4",
+    "equinox @ git+https://github.com/patrick-kidger/equinox@main",
     "jaxlib",
     "tqdm",
     "beartype",
@@ -53,3 +53,6 @@ exclude = ["testing_ground"]
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.hatch.metadata]
+allow-direct-references = true
