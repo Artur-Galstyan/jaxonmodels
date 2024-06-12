@@ -16,6 +16,7 @@ class LLaMAModelArgs:
     max_batch_size: int = 32
     max_seq_len: int = 2048
     head_dim: int
+    rope_theta: float = 500000.0
 
     def __post_init__(self):
         self.head_dim = self.dim // self.n_heads
