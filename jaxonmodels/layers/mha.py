@@ -1,7 +1,7 @@
 import functools as ft
 import math
 import warnings
-from typing import Callable, Literal, Optional, Tuple, Union
+from typing import Any, Callable, Literal, Optional, Tuple, Union
 
 import equinox as eqx
 import jax
@@ -134,11 +134,12 @@ class MultiheadAttention(eqx.Module):
         dropout_p: float = 0.0,
         inference: bool = False,
         kv_interpolation_mode: Literal["average", "repeat"] = "average",
+        dtype: Optional[Any] = None,
         key: PRNGKeyArray,
         **kwargs,
     ):
         qkey, kkey, vkey, okey = jrandom.split(key, 4)
-
+        dtype = dtype if dtype is not None else jnp.float32
         if key_size is None:
             key_size = query_size
         if value_size is None:
@@ -166,7 +167,11 @@ class MultiheadAttention(eqx.Module):
                 _int = jnp.int64
             else:
                 _int = jnp.int32
-            return jnp.empty(key_shape), jnp.empty(value_shape), jnp.zeros((), _int)
+            return (
+                jnp.empty(key_shape, dtype=dtype),
+                jnp.empty(value_shape, dtype=dtype),
+                jnp.zeros((), _int),
+            )
 
         query_proj_out_size = qk_size
         key_proj_out_size = qk_size
@@ -182,17 +187,29 @@ class MultiheadAttention(eqx.Module):
         value_proj_out_size = value_proj_out_size * kv_multihead_dim
 
         self.query_proj = Linear(
-            query_size, query_proj_out_size, use_bias=use_query_bias, key=qkey
+            query_size,
+            query_proj_out_size,
+            use_bias=use_query_bias,
+            key=qkey,
+            dtype=dtype,
         )
         self.key_proj = Linear(
-            key_size, key_proj_out_size, use_bias=use_key_bias, key=kkey
+            key_size, key_proj_out_size, use_bias=use_key_bias, key=kkey, dtype=dtype
         )
         self.value_proj = Linear(
-            value_size, value_proj_out_size, use_bias=use_value_bias, key=vkey
+            value_size,
+            value_proj_out_size,
+            use_bias=use_value_bias,
+            key=vkey,
+            dtype=dtype,
         )
 
         self.output_proj = Linear(
-            vo_size * num_heads, output_size, use_bias=use_output_bias, key=okey
+            vo_size * num_heads,
+            output_size,
+            use_bias=use_output_bias,
+            key=okey,
+            dtype=dtype,
         )
         self.dropout = Dropout(dropout_p, inference=inference)
         self.autoregressive_index = StateIndex(_make_autoregressive_cache())
