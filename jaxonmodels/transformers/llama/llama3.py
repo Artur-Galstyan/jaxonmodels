@@ -61,16 +61,20 @@ class LLaMABlock(eqx.Module):
             state_length=model_args.max_seq_len,
             key=attention_key,
             dtype=dtype,
+            use_query_bias=False,
+            use_key_bias=False,
+            use_value_bias=False,
+            use_output_bias=False,
         )
 
         self.rope = eqx.nn.RotaryPositionalEmbedding(
             embedding_size=model_args.head_dim, theta=model_args.rope_theta
         )
         self.attention_norm = eqx.nn.RMSNorm(
-            shape=model_args.dim, eps=model_args.norm_eps, dtype=dtype
+            shape=model_args.dim, eps=model_args.norm_eps, dtype=dtype, use_bias=False
         )
         self.ffn_norm = eqx.nn.RMSNorm(
-            shape=model_args.dim, eps=model_args.norm_eps, dtype=dtype
+            shape=model_args.dim, eps=model_args.norm_eps, dtype=dtype, use_bias=False
         )
         self.ffn = FFN(model_args, key=ffn_key)
 
@@ -124,13 +128,17 @@ class LLaMA(eqx.Module):
             model_args.vocab_size, model_args.dim, key=tok_embeddings_key, dtype=dtype
         )
         self.norm = eqx.nn.RMSNorm(
-            shape=model_args.dim, eps=model_args.norm_eps, dtype=dtype
+            shape=model_args.dim, eps=model_args.norm_eps, dtype=dtype, use_bias=False
         )
         self.layers = [
             LLaMABlock(model_args, key=block_key) for block_key in block_keys
         ]
         self.output = eqx.nn.Linear(
-            model_args.dim, model_args.vocab_size, key=output_key, dtype=dtype
+            model_args.dim,
+            model_args.vocab_size,
+            key=output_key,
+            dtype=dtype,
+            use_bias=False,
         )
 
     def __call__(
