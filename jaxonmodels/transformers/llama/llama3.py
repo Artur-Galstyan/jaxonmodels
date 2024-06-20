@@ -11,7 +11,7 @@ from jaxonmodels.transformers.llama.model_args import get_dtype, LLaMAModelArgs
 
 
 class FFN(eqx.Module):
-    model_args: LLaMAModelArgs
+    model_args: LLaMAModelArgs = eqx.field(static=True)
     w1: eqx.nn.Linear
     w2: eqx.nn.Linear
     w3: eqx.nn.Linear
@@ -42,7 +42,7 @@ class FFN(eqx.Module):
 
 
 class LLaMABlock(eqx.Module):
-    model_args: LLaMAModelArgs
+    model_args: LLaMAModelArgs = eqx.field(static=True)
     attention: MultiheadAttention
     rope: eqx.nn.RotaryPositionalEmbedding
     attention_norm: eqx.nn.RMSNorm
