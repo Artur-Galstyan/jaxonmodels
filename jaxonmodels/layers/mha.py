@@ -158,8 +158,8 @@ class MultiheadAttention(eqx.Module):
                     "`MultiheadAttention(..., state_length=...)`."
                 )
             if kv_multihead_dim:
-                key_shape = state_length, num_heads, qk_size
-                value_shape = state_length, num_heads, vo_size
+                key_shape = state_length, kv_multihead_dim, qk_size
+                value_shape = state_length, kv_multihead_dim, vo_size
             else:
                 key_shape = state_length, qk_size
                 value_shape = state_length, vo_size
