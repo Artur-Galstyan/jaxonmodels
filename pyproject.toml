@@ -23,6 +23,7 @@ dependencies = [
     "sentencepiece",
     "boto3",
     "boto3-stubs",
+    "pytest>=8.3.3",
 ]
 [project.optional-dependencies]
 dev = ["nox", "pre-commit", "pytest", "mkdocs"]
