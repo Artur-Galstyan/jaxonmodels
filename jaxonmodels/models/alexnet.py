@@ -8,6 +8,11 @@ import jaxtyping as jt
 from loguru import logger
 
 from jaxonmodels.layers.local_response_normalisation import LocalResponseNormalization
+from jaxonmodels.statedict2pytree.s2p import (
+    can_reshape,
+    pytree_to_fields,
+    state_dict_to_fields,
+)
 
 
 class AlexNet(eqx.Module):
@@ -134,8 +139,10 @@ class AlexNet(eqx.Module):
             weights_file, map_location=torch.device("cpu"), weights_only=True
         )
 
-        print(weights_dict.keys())
-        for k in weights_dict.keys():
-            print(k, weights_dict[k].shape)
+        torchfields = state_dict_to_fields(weights_dict)
+        jaxfields = pytree_to_fields(alexnet)
+
+        for t, j in zip(torchfields, jaxfields):
+            print(t.path, t.shape, j.path, j.shape, can_reshape(t.shape, j.shape))
 
         return alexnet
