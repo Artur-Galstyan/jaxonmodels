@@ -5,11 +5,10 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 import jaxtyping as jt
-from loguru import logger
 
 from jaxonmodels.layers.local_response_normalisation import LocalResponseNormalization
 from jaxonmodels.statedict2pytree.s2p import (
-    can_reshape,
+    convert,
     pytree_to_fields,
     state_dict_to_fields,
 )
@@ -42,19 +41,40 @@ class AlexNet(eqx.Module):
             out_channels=64,
             kernel_size=11,
             stride=4,
+            padding=2,
             key=subkeys[0],
         )
         self.conv2 = eqx.nn.Conv2d(
-            in_channels=64, out_channels=192, kernel_size=5, stride=1, key=subkeys[1]
+            in_channels=64,
+            out_channels=192,
+            kernel_size=5,
+            stride=1,
+            padding=2,
+            key=subkeys[1],
         )
         self.conv3 = eqx.nn.Conv2d(
-            in_channels=192, out_channels=384, kernel_size=3, stride=1, key=subkeys[2]
+            in_channels=192,
+            out_channels=384,
+            kernel_size=3,
+            stride=1,
+            padding=1,
+            key=subkeys[2],
         )
         self.conv4 = eqx.nn.Conv2d(
-            in_channels=384, out_channels=256, kernel_size=3, stride=1, key=subkeys[3]
+            in_channels=384,
+            out_channels=256,
+            kernel_size=3,
+            stride=1,
+            padding=1,
+            key=subkeys[3],
         )
         self.conv5 = eqx.nn.Conv2d(
-            in_channels=256, out_channels=256, kernel_size=3, stride=1, key=subkeys[4]
+            in_channels=256,
+            out_channels=256,
+            kernel_size=3,
+            stride=1,
+            padding=1,
+            key=subkeys[4],
         )
 
         self.lrn1 = LocalResponseNormalization()
@@ -76,7 +96,7 @@ class AlexNet(eqx.Module):
     def __call__(
         self,
         x: jt.Float[jt.Array, "c h w"],
-        key: jt.PRNGKeyArray | None,
+        key: jt.PRNGKeyArray | None = None,
         inference: bool = False,
     ) -> jt.Array:
         if inference:
@@ -127,11 +147,7 @@ class AlexNet(eqx.Module):
 
         weights_file = os.path.join(weights_dir, "alexnet-owt-7be5be79.pth")
         if not os.path.exists(weights_file):
-            logger.info(f"Downloading AlexNet weights to {weights_file}...")
             urlretrieve(weights_url, weights_file)
-            logger.info("Download complete.")
-        else:
-            logger.info(f"AlexNet weights already exist at {weights_file}.")
 
         import torch
 
@@ -142,7 +158,6 @@ class AlexNet(eqx.Module):
         torchfields = state_dict_to_fields(weights_dict)
         jaxfields = pytree_to_fields(alexnet)
 
-        for t, j in zip(torchfields, jaxfields):
-            print(t.path, t.shape, j.path, j.shape, can_reshape(t.shape, j.shape))
+        alexnet = convert(weights_dict, alexnet, jaxfields, torchfields)
 
         return alexnet
