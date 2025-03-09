@@ -102,19 +102,7 @@ def get_node(tree: PyTree, targets: list[str]) -> PyTree | None:
         return get_node(subtree, targets[1:])
 
 
-def serialize_pytree_chunks(tree: PyTree, paths: list[ChunkifiedPytreePath], name: str):
-    """
-    Reassemble a JAX PyTree from chunked files and serialize it.
-
-    Args:
-        tree (PyTree): The original JAX PyTree structure.
-        paths (list[ChunkifiedPytreePath]): List of paths to the chunked files.
-        name (str): Name of the output serialized file.
-    """
-    for chunk_path in tqdm(paths):
-        array = np.load(chunk_path.path)
-        tree = replace_node(tree, chunk_path.path.split(".")[1:-1], array)
-
+def serialize_pytree(tree: PyTree, name: str):
     identity = lambda *args, **kwargs: tree
     model, state = eqx.nn.make_with_state(identity)()
     eqx.tree_serialise_leaves(name, (model, state))

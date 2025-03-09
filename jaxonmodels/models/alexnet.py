@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 from urllib.request import urlretrieve
 
 import equinox as eqx
@@ -10,6 +11,7 @@ from jaxonmodels.layers.local_response_normalisation import LocalResponseNormali
 from jaxonmodels.statedict2pytree.s2p import (
     convert,
     pytree_to_fields,
+    serialize_pytree,
     state_dict_to_fields,
 )
 
@@ -136,13 +138,19 @@ class AlexNet(eqx.Module):
         return x
 
     @staticmethod
-    def with_weights() -> "AlexNet":
+    def with_weights(cache: bool = True) -> "AlexNet":
+        jaxonmodels_dir = os.path.expanduser("~/.jaxonmodels/models")
+        os.makedirs(jaxonmodels_dir, exist_ok=True)
         alexnet = AlexNet(n_classes=1000, key=jax.random.key(0))
+        if cache:
+            if os.path.exists(str(Path(jaxonmodels_dir) / "alexnet.eqx")):
+                return eqx.tree_deserialise_leaves(
+                    str(Path(jaxonmodels_dir) / "alexnet.eqx"), alexnet
+                )
 
         # from pytorch
         weights_url = "https://download.pytorch.org/models/alexnet-owt-7be5be79.pth"
-
-        weights_dir = os.path.expanduser("~/.jaxonmodels/weights")
+        weights_dir = os.path.expanduser("~/.jaxonmodels/pytorch_weights")
         os.makedirs(weights_dir, exist_ok=True)
 
         weights_file = os.path.join(weights_dir, "alexnet-owt-7be5be79.pth")
@@ -159,5 +167,8 @@ class AlexNet(eqx.Module):
         jaxfields = pytree_to_fields(alexnet)
 
         alexnet = convert(weights_dict, alexnet, jaxfields, torchfields)
+
+        if cache:
+            serialize_pytree(alexnet, str(Path(jaxonmodels_dir) / "alexnet.eqx"))
 
         return alexnet
