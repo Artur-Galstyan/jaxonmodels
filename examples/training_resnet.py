@@ -12,20 +12,20 @@ from jaxonmodels.models.resnet import ResNet, resnet18
 
 (train, test), info = tfds.load(
     "cifar10", split=["train", "test"], with_info=True, as_supervised=True
-)
+) # pyright: ignore
 
 
 def preprocess(
     img: jt.Float[tf.Tensor, "h w c"], label: jt.Int[tf.Tensor, ""]
 ) -> tuple[jt.Float[tf.Tensor, "h w c"], jt.Int[tf.Tensor, "1 n_classes"]]:
-    img = tf.cast(img, tf.float32) / 255.0
+    img = tf.cast(img, tf.float32) / 255.0 # pyright: ignore
     mean = tf.constant([0.4914, 0.4822, 0.4465])
     std = tf.constant([0.2470, 0.2435, 0.2616])
-    img = (img - mean) / std
+    img = (img - mean) / std # pyright: ignore
 
     img = tf.transpose(img, perm=[2, 0, 1])
 
-    label = tf.one_hot(label, depth=10)
+    # label = tf.one_hot(label, depth=10)
 
     return img, label
 
@@ -55,25 +55,25 @@ train_dataset = tfds.as_numpy(train_dataset)
 test_dataset = tfds.as_numpy(test_dataset)
 
 
+
 def loss_fn(
     resnet: ResNet,
-    x: jt.Float[jt.Array, "batch_size 3 32 32"],
-    y: jt.Float[jt.Array, "batch_size 10"],
+    x: jt.Array,
+    y: jt.Array,
     state: eqx.nn.State,
 ) -> tuple[jt.Array, tuple[jt.Array, eqx.nn.State]]:
     logits, state = eqx.filter_vmap(
         resnet, in_axes=(0, None), out_axes=(0, None), axis_name="batch"
     )(x, state)
-    loss = optax.softmax_cross_entropy(logits, y)
+    loss = optax.softmax_cross_entropy_with_integer_labels(logits, y)
     return jnp.mean(loss), (logits, state)
 
-
-@eqx.filter_jit
+# @eqx.filter_jit
 def step(
     resnet: jt.PyTree,
     state: eqx.nn.State,
-    x: jt.Float[jt.Array, "batch_size 3 32 32"],
-    y: jt.Float[jt.Array, "batch_size 10"],
+    x: jt.Array,
+    y: jt.Array,
     optimizer: optax.GradientTransformation,
     opt_state: optax.OptState,
 ):
@@ -85,38 +85,35 @@ def step(
     return resnet, state, opt_state, loss_value, logits
 
 
+
 class TrainMetrics(eqx.Module, metrics.Collection):
     loss: metrics.Average.from_output("loss")  # pyright: ignore
     accuracy: metrics.Accuracy
 
 
 def eval(
-    resnet: ResNet, state: eqx.nn.State, test_dataset, key: jt.PRNGKeyArray
-) -> tuple[TrainMetrics, eqx.nn.State]:
+    resnet: ResNet, test_dataset, state, key: jt.PRNGKeyArray
+) -> TrainMetrics:
     eval_metrics = TrainMetrics.empty()
     for x, y in test_dataset:
         y = jnp.array(y, dtype=jnp.int32)
         loss, (logits, state) = loss_fn(resnet, x, y, state)
         eval_metrics = eval_metrics.merge(
             TrainMetrics.single_from_model_output(
-                logits=logits, labels=jnp.argmax(y, axis=1), loss=loss
+                logits=logits, labels=y, loss=loss
             )
         )
 
-    return eval_metrics, state
+    return eval_metrics
 
 
 train_metrics = TrainMetrics.empty()
 
 resnet, state = resnet18(key=jax.random.key(0), n_classes=10)
 
-learning_rate = 0.0001
+learning_rate = 0.1
 weight_decay = 5e-4
-optimizer = optax.chain(
-    # optax.clip_by_global_norm(1.0),
-    # optax.add_decayed_weights(weight_decay),
-    optax.sgd(learning_rate)  # , momentum=0.9),
-)
+optimizer = optax.sgd(learning_rate)
 
 opt_state = optimizer.init(eqx.filter(resnet, eqx.is_inexact_array_like))
 
@@ -135,7 +132,7 @@ for epoch in range(n_epochs):
         )
         train_metrics = train_metrics.merge(
             TrainMetrics.single_from_model_output(
-                logits=logits, labels=jnp.argmax(y, axis=1), loss=loss
+                logits=logits, labels=y, loss=loss
             )
         )
 
@@ -144,7 +141,7 @@ for epoch in range(n_epochs):
             {"loss": f"{vals['loss']:.4f}", "acc": f"{vals['accuracy']:.4f}"}
         )
     key, subkey = jax.random.split(key)
-    eval_metrics, state = eval(resnet, state, test_dataset, subkey)
+    eval_metrics = eval(resnet, test_dataset, state, subkey)
     evals = eval_metrics.compute()
     print(
         f"Epoch {epoch}: "

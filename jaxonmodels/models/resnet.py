@@ -10,7 +10,7 @@ from jaxonmodels.layers.batch_norm import BatchNorm
 
 class Downsample(eqx.Module):
     conv: eqx.nn.Conv2d
-    # bn: BatchNorm
+    bn: BatchNorm
 
     def __init__(
         self,
@@ -29,13 +29,13 @@ class Downsample(eqx.Module):
             key=subkey,
         )
 
-        # self.bn = BatchNorm(out_channels, axis_name="batch")
+        self.bn = BatchNorm(out_channels, axis_name="batch")
 
     def __call__(
         self, x: jt.Float[jt.Array, "c_in h w"], state: eqx.nn.State
     ) -> tuple[jt.Float[jt.Array, "c_out*e h/s w/s"], eqx.nn.State]:
         x = self.conv(x)
-        # x, state = self.bn(x, state)
+        x, state = self.bn(x, state)
 
         return x, state
 
@@ -44,10 +44,10 @@ class BasicBlock(eqx.Module):
     downsample: Downsample | None
 
     conv1: eqx.nn.Conv2d
-    # bn1: BatchNorm
+    bn1: BatchNorm
 
     conv2: eqx.nn.Conv2d
-    # bn2: BatchNorm
+    bn2: BatchNorm
 
     expansion: int = eqx.field(static=True, default=1)
 
@@ -73,7 +73,7 @@ class BasicBlock(eqx.Module):
             use_bias=False,
             key=subkeys[0],
         )
-        # self.bn1 = BatchNorm(input_size=out_channels, axis_name="batch")
+        self.bn1 = BatchNorm(size=out_channels, axis_name="batch")
 
         self.conv2 = eqx.nn.Conv2d(
             out_channels,
@@ -84,7 +84,7 @@ class BasicBlock(eqx.Module):
             use_bias=False,
             key=subkeys[1],
         )
-        # self.bn2 = BatchNorm(input_size=out_channels, axis_name="batch")
+        self.bn2 = BatchNorm(size=out_channels, axis_name="batch")
 
         self.downsample = downsample
 
@@ -92,12 +92,12 @@ class BasicBlock(eqx.Module):
         i = x
 
         x = self.conv1(x)
-        # x, state = self.bn1(x, state)
+        x, state = self.bn1(x, state)
 
         x = jax.nn.relu(x)
 
         x = self.conv2(x)
-        # x, state = self.bn2(x, state)
+        x, state = self.bn2(x, state)
 
         if self.downsample:
             i, state = self.downsample(i, state)
@@ -112,13 +112,13 @@ class Bottleneck(eqx.Module):
     downsample: Downsample | None
 
     conv1: eqx.nn.Conv2d
-    # bn1: BatchNorm
+    bn1: BatchNorm
 
     conv2: eqx.nn.Conv2d
-    # bn2: BatchNorm
+    bn2: BatchNorm
 
     conv3: eqx.nn.Conv2d
-    # bn3: BatchNorm
+    bn3: BatchNorm
 
     expansion: int = eqx.field(static=True, default=4)
 
@@ -139,7 +139,7 @@ class Bottleneck(eqx.Module):
         self.conv1 = eqx.nn.Conv2d(
             in_channels, width, kernel_size=1, use_bias=False, key=subkeys[0]
         )
-        # self.bn1 = BatchNorm(width, axis_name="batch")
+        self.bn1 = BatchNorm(width, axis_name="batch")
 
         self.conv2 = eqx.nn.Conv2d(
             width,
@@ -153,7 +153,7 @@ class Bottleneck(eqx.Module):
             key=subkeys[1],
         )
 
-        # self.bn2 = BatchNorm(width, axis_name="batch")
+        self.bn2 = BatchNorm(width, axis_name="batch")
 
         self.conv3 = eqx.nn.Conv2d(
             width,
@@ -163,7 +163,7 @@ class Bottleneck(eqx.Module):
             use_bias=False,
         )
 
-        # self.bn3 = BatchNorm(out_channels * self.expansion, axis_name="batch")
+        self.bn3 = BatchNorm(out_channels * self.expansion, axis_name="batch")
 
         self.downsample = downsample
 
@@ -173,15 +173,15 @@ class Bottleneck(eqx.Module):
         i = x
 
         x = self.conv1(x)
-        # x, state = self.bn1(x, state)
+        x, state = self.bn1(x, state)
         x = jax.nn.relu(x)
 
         x = self.conv2(x)
-        # x, state = self.bn2(x, state)
+        x, state = self.bn2(x, state)
         x = jax.nn.relu(x)
 
         x = self.conv3(x)
-        # x, state = self.bn3(x, state)
+        x, state = self.bn3(x, state)
 
         if self.downsample:
             i, state = self.downsample(i, state)
@@ -193,7 +193,7 @@ class Bottleneck(eqx.Module):
 
 class ResNet(eqx.Module):
     conv1: eqx.nn.Conv2d
-    # bn: BatchNorm
+    bn: BatchNorm
     mp: eqx.nn.MaxPool2d
 
     layer1: list[BasicBlock | Bottleneck]
@@ -239,7 +239,7 @@ class ResNet(eqx.Module):
             key=subkeys[0],
         )
 
-        # self.bn = BatchNorm(self.running_internal_channels, axis_name="batch")
+        self.bn = BatchNorm(self.running_internal_channels, axis_name="batch")
         self.mp = eqx.nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
 
         self.layer1 = self._make_layer(
@@ -358,7 +358,7 @@ class ResNet(eqx.Module):
         self, x: jt.Float[jt.Array, "c h w"], state: eqx.nn.State
     ) -> tuple[jt.Float[jt.Array, " n_classes"], eqx.nn.State]:
         x = self.conv1(x)
-        # x, state = self.bn(x, state)
+        x, state = self.bn(x, state)
         x = jax.nn.relu(x)
         x = self.mp(x)
 

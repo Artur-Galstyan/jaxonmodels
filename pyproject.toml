@@ -27,6 +27,8 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["pre-commit", "pytest", "mkdocs"]
 examples = ["tensorflow", "tensorflow_datasets", "clu"]
+tests = ["torch", "torchvision"]
+
 
 [tool.ruff.lint]
 fixable = ["I001", "F401"]
