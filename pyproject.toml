@@ -18,16 +18,15 @@ dependencies = [
     "optax",
     "jaxonloader",
     "fire",
-    "wandb",
     "jaxtyping",
     "sentencepiece",
     "boto3",
     "boto3-stubs",
-    "pytest>=8.3.3",
+    "pytest",
 ]
 [project.optional-dependencies]
-dev = ["nox", "pre-commit", "pytest", "mkdocs"]
-
+dev = ["pre-commit", "pytest", "mkdocs"]
+examples = ["tensorflow", "tensorflow_datasets", "clu"]
 
 [tool.ruff.lint]
 fixable = ["I001", "F401"]

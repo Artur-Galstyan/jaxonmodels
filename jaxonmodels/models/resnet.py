@@ -10,7 +10,7 @@ from jaxonmodels.layers.batch_norm import BatchNorm
 
 class Downsample(eqx.Module):
     conv: eqx.nn.Conv2d
-    bn: BatchNorm
+    # bn: BatchNorm
 
     def __init__(
         self,

@@ -8,20 +8,14 @@ import torch
 import torchvision.models as models
 import torchvision.transforms as transforms
 from PIL import Image
-
+import equinox as eqx
 from jaxonmodels.models.alexnet import AlexNet
 
-a = AlexNet.with_weights()
-print(a.conv1.weight.shape)
+a = eqx.filter_jit(AlexNet.with_weights())
 
 alexnet = models.alexnet(weights=models.AlexNet_Weights.IMAGENET1K_V1)
 alexnet.eval()
 
-print(alexnet.features[0].weight.shape)
-
-print(
-    np.allclose(np.array(a.conv1.weight), alexnet.features[0].weight.detach().numpy())  # pyright: ignore
-)
 
 response = requests.get(
     "https://s3.amazonaws.com/deep-learning-models/image-models/imagenet_class_index.json"
