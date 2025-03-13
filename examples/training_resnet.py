@@ -68,7 +68,7 @@ def loss_fn(
     loss = optax.softmax_cross_entropy_with_integer_labels(logits, y)
     return jnp.mean(loss), (logits, state)
 
-# @eqx.filter_jit
+@eqx.filter_jit
 def step(
     resnet: jt.PyTree,
     state: eqx.nn.State,
@@ -126,6 +126,7 @@ for epoch in range(n_epochs):
 
     pbar = tqdm(enumerate(train_dataset), total=batch_count, desc=f"Epoch {epoch}")
     for i, (x, y) in pbar:
+        x = jnp.array(x)
         y = jnp.array(y, dtype=jnp.int32)
         resnet, state, opt_state, loss, logits = step(
             resnet, state, x, y, optimizer, opt_state

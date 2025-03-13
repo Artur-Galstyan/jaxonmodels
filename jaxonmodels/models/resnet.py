@@ -1,5 +1,6 @@
 from typing import Type
-
+import functools
+from beartype.typing import Callable
 import equinox as eqx
 import jax
 import jax.numpy as jnp
@@ -191,15 +192,24 @@ class Bottleneck(eqx.Module):
         return x, state
 
 
+class ResNetBlock(eqx.Module):
+    blocks: list[BasicBlock | Bottleneck]
+
+    def __call__(self, x, state):
+        for block in self.blocks:
+            x, state = block(x, state)
+        return x, state
+
+
 class ResNet(eqx.Module):
     conv1: eqx.nn.Conv2d
     bn: BatchNorm
     mp: eqx.nn.MaxPool2d
 
-    layer1: list[BasicBlock | Bottleneck]
-    layer2: list[BasicBlock | Bottleneck]
-    layer3: list[BasicBlock | Bottleneck]
-    layer4: list[BasicBlock | Bottleneck]
+    layer1: ResNetBlock
+    layer2: ResNetBlock
+    layer3: ResNetBlock
+    layer4: ResNetBlock
 
     avg: eqx.nn.AdaptiveAvgPool2d
     fc: eqx.nn.Linear
@@ -242,7 +252,7 @@ class ResNet(eqx.Module):
         self.bn = BatchNorm(self.running_internal_channels, axis_name="batch")
         self.mp = eqx.nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
 
-        self.layer1 = self._make_layer(
+        self.layer1 = ResNetBlock(self._make_layer(
             block,
             64,
             layers[0],
@@ -251,8 +261,8 @@ class ResNet(eqx.Module):
             groups=groups,
             base_width=width_per_group,
             key=subkeys[1],
-        )
-        self.layer2 = self._make_layer(
+        ))
+        self.layer2 = ResNetBlock(self._make_layer(
             block,
             128,
             layers[1],
@@ -261,8 +271,8 @@ class ResNet(eqx.Module):
             groups=groups,
             base_width=width_per_group,
             key=subkeys[2],
-        )
-        self.layer3 = self._make_layer(
+        ))
+        self.layer3 = ResNetBlock(self._make_layer(
             block,
             256,
             layers[2],
@@ -271,8 +281,8 @@ class ResNet(eqx.Module):
             groups=groups,
             base_width=width_per_group,
             key=subkeys[3],
-        )
-        self.layer4 = self._make_layer(
+        ))
+        self.layer4 = ResNetBlock(self._make_layer(
             block,
             512,
             layers[3],
@@ -281,7 +291,7 @@ class ResNet(eqx.Module):
             groups=groups,
             base_width=width_per_group,
             key=subkeys[4],
-        )
+        ))
 
         self.avg = eqx.nn.AdaptiveAvgPool2d(target_shape=(1, 1))
         self.fc = eqx.nn.Linear(512 * block.expansion, n_classes, key=subkeys[-1])
@@ -362,17 +372,10 @@ class ResNet(eqx.Module):
         x = jax.nn.relu(x)
         x = self.mp(x)
 
-        for layer in self.layer1:
-            x, state = layer(x, state)
-
-        for layer in self.layer2:
-            x, state = layer(x, state)
-
-        for layer in self.layer3:
-            x, state = layer(x, state)
-
-        for layer in self.layer4:
-            x, state = layer(x, state)
+        x, state = self.layer1(x, state)
+        x, state = self.layer2(x, state)
+        x, state = self.layer3(x, state)
+        x, state = self.layer4(x, state)
 
         x = self.avg(x)
         x = jnp.ravel(x)

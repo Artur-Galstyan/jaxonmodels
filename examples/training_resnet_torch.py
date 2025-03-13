@@ -335,7 +335,8 @@ def _resnet(
 
 
 def resnet18(**kwargs: Any) -> ResNet:
-    return _resnet(BasicBlock, [2, 2, 2, 2], **kwargs)
+    # return _resnet(BasicBlock, [2, 2, 2, 2], **kwargs)
+    return _resnet(BasicBlock, [1, 1, 1, 1], **kwargs)
 
 
 def resnet34(**kwargs: Any) -> ResNet:
