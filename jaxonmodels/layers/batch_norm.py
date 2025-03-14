@@ -6,7 +6,7 @@ from equinox.nn import State
 from jaxtyping import Array, Float, PRNGKeyArray
 
 
-class BatchNorm(eqx.Module):
+class BatchNorm(eqx.nn.StatefulLayer):
     state_index: eqx.nn.StateIndex
 
     gamma: Float[Array, "size"] | None

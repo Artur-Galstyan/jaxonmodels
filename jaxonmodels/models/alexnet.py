@@ -164,9 +164,9 @@ class AlexNet(eqx.Module):
         )
 
         torchfields = state_dict_to_fields(weights_dict)
-        jaxfields = pytree_to_fields(alexnet)
+        jaxfields, _ = pytree_to_fields(alexnet)
 
-        alexnet = convert(weights_dict, alexnet, jaxfields, torchfields)
+        alexnet = convert(weights_dict, alexnet, jaxfields, None, torchfields)
 
         if cache:
             serialize_pytree(alexnet, str(Path(jaxonmodels_dir) / "alexnet.eqx"))

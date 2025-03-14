@@ -12,16 +12,16 @@ from jaxonmodels.models.resnet import ResNet, resnet18
 
 (train, test), info = tfds.load(
     "cifar10", split=["train", "test"], with_info=True, as_supervised=True
-) # pyright: ignore
+)  # pyright: ignore
 
 
 def preprocess(
     img: jt.Float[tf.Tensor, "h w c"], label: jt.Int[tf.Tensor, ""]
 ) -> tuple[jt.Float[tf.Tensor, "h w c"], jt.Int[tf.Tensor, "1 n_classes"]]:
-    img = tf.cast(img, tf.float32) / 255.0 # pyright: ignore
+    img = tf.cast(img, tf.float32) / 255.0  # pyright: ignore
     mean = tf.constant([0.4914, 0.4822, 0.4465])
     std = tf.constant([0.2470, 0.2435, 0.2616])
-    img = (img - mean) / std # pyright: ignore
+    img = (img - mean) / std  # pyright: ignore
 
     img = tf.transpose(img, perm=[2, 0, 1])
 
@@ -42,7 +42,7 @@ def preprocess_train(
 
 train_dataset = train.map(preprocess_train, num_parallel_calls=tf.data.AUTOTUNE)
 SHUFFLE_VAL = len(train_dataset) // 1000
-BATCH_SIZE = 128
+BATCH_SIZE = 4
 train_dataset = train_dataset.shuffle(SHUFFLE_VAL)
 train_dataset = train_dataset.batch(BATCH_SIZE)
 train_dataset = train_dataset.prefetch(tf.data.AUTOTUNE)
@@ -53,7 +53,6 @@ test_dataset = test_dataset.prefetch(tf.data.AUTOTUNE)
 
 train_dataset = tfds.as_numpy(train_dataset)
 test_dataset = tfds.as_numpy(test_dataset)
-
 
 
 def loss_fn(
@@ -67,6 +66,7 @@ def loss_fn(
     )(x, state)
     loss = optax.softmax_cross_entropy_with_integer_labels(logits, y)
     return jnp.mean(loss), (logits, state)
+
 
 @eqx.filter_jit
 def step(
@@ -85,23 +85,18 @@ def step(
     return resnet, state, opt_state, loss_value, logits
 
 
-
 class TrainMetrics(eqx.Module, metrics.Collection):
     loss: metrics.Average.from_output("loss")  # pyright: ignore
     accuracy: metrics.Accuracy
 
 
-def eval(
-    resnet: ResNet, test_dataset, state, key: jt.PRNGKeyArray
-) -> TrainMetrics:
+def eval(resnet: ResNet, test_dataset, state, key: jt.PRNGKeyArray) -> TrainMetrics:
     eval_metrics = TrainMetrics.empty()
     for x, y in test_dataset:
         y = jnp.array(y, dtype=jnp.int32)
         loss, (logits, state) = loss_fn(resnet, x, y, state)
         eval_metrics = eval_metrics.merge(
-            TrainMetrics.single_from_model_output(
-                logits=logits, labels=y, loss=loss
-            )
+            TrainMetrics.single_from_model_output(logits=logits, labels=y, loss=loss)
         )
 
     return eval_metrics
@@ -132,9 +127,7 @@ for epoch in range(n_epochs):
             resnet, state, x, y, optimizer, opt_state
         )
         train_metrics = train_metrics.merge(
-            TrainMetrics.single_from_model_output(
-                logits=logits, labels=y, loss=loss
-            )
+            TrainMetrics.single_from_model_output(logits=logits, labels=y, loss=loss)
         )
 
         vals = train_metrics.compute()
