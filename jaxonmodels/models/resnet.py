@@ -15,6 +15,7 @@ from jaxonmodels.statedict2pytree.s2p import (
     convert,
     move_running_fields_to_the_end,
     pytree_to_fields,
+    serialize_pytree,
     state_dict_to_fields,
 )
 
@@ -500,10 +501,10 @@ def _with_weights(init_func):
                 weights_dict, (resnet, state), jaxfields, state_indices, torchfields
             )
 
-            # if cache:
-            #     serialize_pytree(
-            #         (resnet, state), str(Path(jaxonmodels_dir) / f"{weights}.eqx")
-            #     )
+            if cache:
+                serialize_pytree(
+                    (resnet, state), str(Path(jaxonmodels_dir) / f"{weights}.eqx")
+                )
 
         return resnet, state
 
@@ -532,6 +533,7 @@ def resnet18(
     return resnet, state
 
 
+@_with_weights
 @_kaiming_init
 def resnet34(
     key: jt.PRNGKeyArray,
@@ -552,6 +554,7 @@ def resnet34(
     return resnet, state
 
 
+@_with_weights
 @_kaiming_init
 def resnet50(
     key: jt.PRNGKeyArray,

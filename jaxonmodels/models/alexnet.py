@@ -137,38 +137,39 @@ class AlexNet(eqx.Module):
         x = self.final(x)
         return x
 
-    @staticmethod
-    def with_weights(cache: bool = True) -> "AlexNet":
-        jaxonmodels_dir = os.path.expanduser("~/.jaxonmodels/models")
-        os.makedirs(jaxonmodels_dir, exist_ok=True)
-        alexnet = AlexNet(n_classes=1000, key=jax.random.key(0))
-        if cache:
-            if os.path.exists(str(Path(jaxonmodels_dir) / "alexnet.eqx")):
-                return eqx.tree_deserialise_leaves(
-                    str(Path(jaxonmodels_dir) / "alexnet.eqx"), alexnet
-                )
 
-        # from pytorch
-        weights_url = "https://download.pytorch.org/models/alexnet-owt-7be5be79.pth"
-        weights_dir = os.path.expanduser("~/.jaxonmodels/pytorch_weights")
-        os.makedirs(weights_dir, exist_ok=True)
-
-        weights_file = os.path.join(weights_dir, "alexnet-owt-7be5be79.pth")
-        if not os.path.exists(weights_file):
-            urlretrieve(weights_url, weights_file)
-
-        import torch
-
-        weights_dict = torch.load(
-            weights_file, map_location=torch.device("cpu"), weights_only=True
-        )
-
-        torchfields = state_dict_to_fields(weights_dict)
-        jaxfields, _ = pytree_to_fields(alexnet)
-
-        alexnet = convert(weights_dict, alexnet, jaxfields, None, torchfields)
-
-        if cache:
-            serialize_pytree(alexnet, str(Path(jaxonmodels_dir) / "alexnet.eqx"))
-
+def alexnet(with_weights: bool = False, cache: bool = True) -> "AlexNet":
+    jaxonmodels_dir = os.path.expanduser("~/.jaxonmodels/models")
+    os.makedirs(jaxonmodels_dir, exist_ok=True)
+    alexnet = AlexNet(n_classes=1000, key=jax.random.key(0))
+    if not with_weights:
         return alexnet
+    if cache:
+        if os.path.exists(str(Path(jaxonmodels_dir) / "alexnet.eqx")):
+            return eqx.tree_deserialise_leaves(
+                str(Path(jaxonmodels_dir) / "alexnet.eqx"), alexnet
+            )
+
+    weights_url = "https://download.pytorch.org/models/alexnet-owt-7be5be79.pth"
+    weights_dir = os.path.expanduser("~/.jaxonmodels/pytorch_weights")
+    os.makedirs(weights_dir, exist_ok=True)
+
+    weights_file = os.path.join(weights_dir, "alexnet-owt-7be5be79.pth")
+    if not os.path.exists(weights_file):
+        urlretrieve(weights_url, weights_file)
+
+    import torch
+
+    weights_dict = torch.load(
+        weights_file, map_location=torch.device("cpu"), weights_only=True
+    )
+
+    torchfields = state_dict_to_fields(weights_dict)
+    jaxfields, _ = pytree_to_fields(alexnet)
+
+    alexnet = convert(weights_dict, alexnet, jaxfields, None, torchfields)
+
+    if cache:
+        serialize_pytree(alexnet, str(Path(jaxonmodels_dir) / "alexnet.eqx"))
+
+    return alexnet

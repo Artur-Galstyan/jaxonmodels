@@ -101,9 +101,7 @@ def get_node(
 
 
 def serialize_pytree(tree: PyTree, name: str):
-    identity = lambda *args, **kwargs: tree
-    model, state = eqx.nn.make_with_state(identity)()
-    eqx.tree_serialise_leaves(name, (model, state))
+    eqx.tree_serialise_leaves(name, tree)
 
 
 def replace_node(
