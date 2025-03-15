@@ -1,14 +1,10 @@
-import json
-
 import jax
-from jaxonmodels.transformers.llama.llama3 import LLaMA
-from jaxonmodels.transformers.llama.model_args import LLaMAModelArgs
 
+from jaxonmodels.models.resnet import resnet18
+from jaxonmodels.statedict2pytree.s2p import pytree_to_fields
 
-with open("params.json", "r") as f:
-    params = json.load(f)
+r, s = resnet18(key=jax.random.key(0))
+fields, _ = pytree_to_fields((r, s))
 
-model_args = LLaMAModelArgs(**params)
-key = jax.random.key(2)
-
-model = LLaMA(model_args, key=key)
+for f in fields:
+    print(jax.tree_util.keystr(f.path))

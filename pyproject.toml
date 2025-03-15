@@ -18,20 +18,21 @@ dependencies = [
     "optax",
     "jaxonloader",
     "fire",
-    "wandb",
     "jaxtyping",
     "sentencepiece",
     "boto3",
     "boto3-stubs",
+    "pytest",
 ]
 [project.optional-dependencies]
-dev = ["nox", "pre-commit", "pytest", "mkdocs"]
+dev = ["pre-commit", "pytest", "mkdocs"]
+examples = ["tensorflow", "tensorflow_datasets", "clu", "requests"]
+tests = ["torch", "torchvision"]
 
 
 [tool.ruff.lint]
 fixable = ["I001", "F401"]
-ignore = ["E402", "E721", "E731", "E741", "F722"]
-ignore-init-module-imports = true
+ignore = ["E402", "E721", "E731", "E741", "F722", "F821"]
 select = ["E", "F", "I001"]
 
 
