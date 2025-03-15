@@ -575,6 +575,7 @@ def resnet50(
     return resnet, state
 
 
+@_with_weights
 @_kaiming_init
 def resnet101(
     key: jt.PRNGKeyArray,
@@ -596,6 +597,7 @@ def resnet101(
     return resnet, state
 
 
+@_with_weights
 @_kaiming_init
 def resnet152(
     key: jt.PRNGKeyArray,
@@ -617,6 +619,7 @@ def resnet152(
     return resnet, state
 
 
+@_with_weights
 @_kaiming_init
 def resnext50_32x4d(
     key: jt.PRNGKeyArray,
@@ -638,6 +641,7 @@ def resnext50_32x4d(
     return resnet, state
 
 
+@_with_weights
 @_kaiming_init
 def resnext101_32x8d(
     key: jt.PRNGKeyArray,
@@ -659,6 +663,7 @@ def resnext101_32x8d(
     return resnet, state
 
 
+@_with_weights
 @_kaiming_init
 def resnext101_64x4d(
     key: jt.PRNGKeyArray,
@@ -679,6 +684,7 @@ def resnext101_64x4d(
     return resnet, state
 
 
+@_with_weights
 @_kaiming_init
 def wide_resnet50_2(
     key: jt.PRNGKeyArray,
@@ -700,6 +706,7 @@ def wide_resnet50_2(
     return resnet, state
 
 
+@_with_weights
 @_kaiming_init
 def wide_resnet101_2(
     key: jt.PRNGKeyArray,

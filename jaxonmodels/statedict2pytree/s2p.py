@@ -10,7 +10,6 @@ import torch
 from jax.tree_util import FlattenedIndexKey, GetAttrKey, KeyPath, SequenceKey
 from jaxtyping import Array, PyTree
 from pydantic import BaseModel
-from tqdm import tqdm
 
 
 class ChunkifiedPytreePath(BaseModel):
@@ -175,7 +174,7 @@ def chunkify_state_dict(
         ChunkifiedStatedictPath: A path to the chunked files
     """
 
-    for key in tqdm(state_dict.keys()):
+    for key in state_dict.keys():
         if not hasattr(state_dict[key], "shape"):
             continue
         path = pathlib.Path(target_path) / "state_dict"
