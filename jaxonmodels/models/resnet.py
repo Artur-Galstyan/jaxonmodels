@@ -19,7 +19,7 @@ from jaxonmodels.statedict2pytree.s2p import (
     state_dict_to_fields,
 )
 
-URLS = {
+_MODELS = {
     "resnet18_IMAGENET1K_V1": "https://download.pytorch.org/models/resnet18-f37072fd.pth",
     "resnet34_IMAGENET1K_V1": "https://download.pytorch.org/models/resnet34-b627a593.pth",
     "resnet50_IMAGENET1K_V1": "https://download.pytorch.org/models/resnet50-0676ba61.pth",
@@ -469,7 +469,7 @@ def _with_weights(init_func):
     def wrapper(key, n_classes=1000, weights=None, cache: bool = True, *args, **kwargs):
         resnet, state = init_func(key, n_classes, *args, **kwargs)
         if weights is not None:
-            weights_url = URLS.get(weights)
+            weights_url = _MODELS.get(weights)
             if weights_url is None:
                 raise ValueError(f"No weights found for {weights}")
             jaxonmodels_dir = os.path.expanduser("~/.jaxonmodels/models")

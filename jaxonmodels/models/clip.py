@@ -1,10 +1,35 @@
+import os
+from functools import wraps
+from pathlib import Path
+from urllib.request import urlretrieve
+
 import equinox as eqx
 import jax
 import jax.numpy as jnp
+from beartype.typing import Literal, Type
 from jaxtyping import Array, Float, Int, PRNGKeyArray
 
 import jaxonmodels.functions as F
 from jaxonmodels.layers.batch_norm import BatchNorm
+from jaxonmodels.statedict2pytree.s2p import (
+    convert,
+    move_running_fields_to_the_end,
+    pytree_to_fields,
+    serialize_pytree,
+    state_dict_to_fields,
+)
+
+_MODELS = {
+    "RN50": "https://openaipublic.azureedge.net/clip/models/afeb0e10f9e5a86da6080e35cf09123aca3b358a0c3e3b6c78a7b63bc04b6762/RN50.pt",
+    "RN101": "https://openaipublic.azureedge.net/clip/models/8fa8567bab74a42d41c5915025a8e4538c3bdbe8804a470a72f30b0d94fab599/RN101.pt",
+    "RN50x4": "https://openaipublic.azureedge.net/clip/models/7e526bd135e493cef0776de27d5f42653e6b4c8bf9e0f653bb11773263205fdd/RN50x4.pt",
+    "RN50x16": "https://openaipublic.azureedge.net/clip/models/52378b407f34354e150460fe41077663dd5b39c54cd0bfd2b27167a4a06ec9aa/RN50x16.pt",
+    "RN50x64": "https://openaipublic.azureedge.net/clip/models/be1cfb55d75a9666199fb2206c106743da0f6468c9d327f3e0d0a543a9919d9c/RN50x64.pt",
+    "ViT-B/32": "https://openaipublic.azureedge.net/clip/models/40d365715913c9da98579312b702a82c18be219cc2a73407c4526f58eba950af/ViT-B-32.pt",
+    "ViT-B/16": "https://openaipublic.azureedge.net/clip/models/5806e77cd80f8b59890b7e101eabd078d9fb84e6937f9e85e4ecb61988df416f/ViT-B-16.pt",
+    "ViT-L/14": "https://openaipublic.azureedge.net/clip/models/b8cca3fd41ae0c99ba7e8951adf17d267cdb84cd88be6f7c2e0eca1737a03836/ViT-L-14.pt",
+    "ViT-L/14@336px": "https://openaipublic.azureedge.net/clip/models/3035c92b350959924f9f00213499208652fc7ea050643e8b385c2dac08641f02/ViT-L-14-336px.pt",
+}
 
 
 class Downsample(eqx.Module):
@@ -192,7 +217,7 @@ class AttentionPool2d(eqx.Module):
             out_proj_weight=self.c_proj.weight,
             out_proj_bias=self.c_proj.bias,
             use_separate_proj_weight=True,
-            training=not inference,
+            inference=inference,
             need_weights=False,
         )
         return x.squeeze(0)
@@ -450,13 +475,13 @@ class VisionTransformer(eqx.Module):
 
 
 class CLIP(eqx.Module):
+    positional_embedding: Array
+    text_projection: Array
+    logit_scale: Array
     visual: ModifiedResNet | VisionTransformer
     transformer: Transformer
     token_embedding: eqx.nn.Embedding
-    positional_embedding: Array
     ln_final: eqx.nn.LayerNorm
-    text_projection: Array
-    logit_scale: Array
 
     context_length: int = eqx.field(static=True)
 
@@ -565,3 +590,111 @@ class CLIP(eqx.Module):
         logits_per_text = logits_per_image.T
 
         return logits_per_image, logits_per_text, state
+
+
+def _with_weights(init_func):
+    @wraps(init_func)
+    def wrapper(key, weights=None, cache: bool = True, *args, **kwargs):
+        clip, state = init_func(key, *args, **kwargs)
+        if weights is not None:
+            weights_url = _MODELS.get(weights)
+            if weights_url is None:
+                raise ValueError(f"No weights found for {weights}")
+            jaxonmodels_dir = os.path.expanduser("~/.jaxonmodels/models")
+            os.makedirs(jaxonmodels_dir, exist_ok=True)
+
+            if cache:
+                if os.path.exists(str(Path(jaxonmodels_dir) / f"{weights}.eqx")):
+                    return eqx.tree_deserialise_leaves(
+                        str(Path(jaxonmodels_dir) / f"{weights}.eqx"), (clip, state)
+                    )
+            weights_dir = os.path.expanduser("~/.jaxonmodels/pytorch_weights")
+            os.makedirs(weights_dir, exist_ok=True)
+            filename = weights_url.split("/")[-1]
+            weights_file = os.path.join(weights_dir, filename)
+            if not os.path.exists(weights_file):
+                urlretrieve(weights_url, weights_file)
+
+            import torch
+
+            model = torch.load(
+                weights_file, map_location=torch.device("cpu"), weights_only=False
+            )
+            weights_dict = {}
+            for name, param in model.named_parameters():
+                weights_dict[name] = param.clone().detach()
+            for name, buffer in model.named_buffers():
+                weights_dict[name] = buffer.clone().detach()
+            weights_dict["logit_scale"] = torch.Tensor(
+                [model.logit_scale.clone().detach()]
+            )
+
+            torchfields = state_dict_to_fields(weights_dict)
+            torchfields = move_running_fields_to_the_end(torchfields)
+            jaxfields, state_indices = pytree_to_fields((clip, state))
+
+            resnet, state = convert(
+                weights_dict, (clip, state), jaxfields, state_indices, torchfields
+            )
+
+            if cache:
+                serialize_pytree(
+                    (clip, state), str(Path(jaxonmodels_dir) / f"{weights}.eqx")
+                )
+        return clip, state
+
+    return wrapper
+
+
+Weights = Type[
+    Literal[
+        "RN50",
+        "RN101",
+        "RN50x4",
+        "RN50x16",
+        "RN50x64",
+        "ViT-B/32",
+        "ViT-B/16",
+        "ViT-L/14",
+        "ViT-L/14@336px",
+    ]
+]
+
+
+@_with_weights
+def clip_resnet50(
+    key: PRNGKeyArray | None = None, weights: Literal["RN50"] | None = None
+):
+    if key is None:
+        key = jax.random.key(42)
+    embed_dim = 1024
+    image_resolution = 224
+    vision_layers = (3, 4, 6, 3)
+    vision_width = 64
+    vision_patch_size = None
+    context_length = 77
+    vocab_size = 49408
+    transformer_width = 512
+    transformer_heads = 8
+    transformer_layers = 12
+
+    clip, state = eqx.nn.make_with_state(CLIP)(
+        embed_dim,
+        image_resolution,
+        vision_layers,
+        vision_width,
+        vision_patch_size,
+        context_length,
+        vocab_size,
+        transformer_width,
+        transformer_heads,
+        transformer_layers,
+        key=key,
+    )
+
+    return clip, state
+
+
+@_with_weights
+def clip(key: PRNGKeyArray, weights: Weights | None = None):
+    pass

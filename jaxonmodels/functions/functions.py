@@ -9,7 +9,12 @@ import jax.numpy as jnp
 import regex as re
 from jaxtyping import Array, Float, Int, PRNGKeyArray
 
-__all__ = ["multi_head_attention_forward", "clip_tokenize", "build_attention_mask"]
+__all__ = [
+    "multi_head_attention_forward",
+    "clip_tokenize",
+    "build_attention_mask",
+    "canonical_mask",
+]
 
 
 def multi_head_attention_forward(
@@ -26,7 +31,7 @@ def multi_head_attention_forward(
     dropout_p: float = 0.0,
     out_proj_weight: Float[Array, "d_model d_model"] | None = None,
     out_proj_bias: Float[Array, "d_model"] | None = None,
-    training: bool = True,
+    inference: bool = False,
     key_padding_mask: Float[Array, "src_len"] | None = None,
     attn_mask: Float[Array, "tgt_len src_len"] | None = None,
     need_weights: bool = True,
@@ -184,7 +189,7 @@ def multi_head_attention_forward(
     # [num_heads, tgt_len, src_len]
     attn_output_weights = jax.nn.softmax(attn_output_weights, axis=-1)
 
-    if dropout_p > 0.0 and training:
+    if dropout_p > 0.0 and not inference:
         assert dropout_key is not None, (
             "dropout_key required because dropout_p > 0.0 and training"
         )
@@ -387,3 +392,52 @@ def build_attention_mask(context_length: int):
     mask = jnp.full(shape=(context_length, context_length), fill_value=float("-inf"))
     mask = jnp.triu(mask)
     return mask
+
+
+def canonical_mask(
+    mask,
+    mask_name,
+    other_name="",
+    other_type=None,
+    target_type=jnp.float32,
+    other_mask=None,
+    check_other=True,
+):
+    if mask is None:
+        return None
+    if mask.dtype == bool:
+        additive_mask = jnp.where(mask, -jnp.inf, 0.0).astype(target_type)
+        return additive_mask
+    elif jnp.issubdtype(mask.dtype, jnp.integer) or jnp.issubdtype(
+        mask.dtype, jnp.floating
+    ):
+        return mask.astype(target_type)
+    else:
+        raise TypeError(
+            f"{mask_name} must be bool, int, or float tensor, but got {mask.dtype}"
+        )
+
+
+def canonical_key_padding_mask(
+    key_padding_mask, attn_mask=None, query_dtype=jnp.float32
+):
+    """Wrapper for canonicalizing key_padding_mask"""
+    return canonical_mask(
+        mask=key_padding_mask,
+        mask_name="key_padding_mask",
+        other_name="attn_mask",
+        other_mask=attn_mask,
+        target_type=query_dtype,
+    )
+
+
+def canonical_attn_mask(attn_mask, query_dtype=jnp.float32):
+    """Wrapper for canonicalizing attn_mask"""
+    return canonical_mask(
+        mask=attn_mask,
+        mask_name="attn_mask",
+        other_type=None,
+        other_name="",
+        target_type=query_dtype,
+        check_other=False,
+    )

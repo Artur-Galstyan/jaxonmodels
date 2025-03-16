@@ -1,4 +1,5 @@
 import equinox as eqx
+import jax
 import jax.numpy as jnp
 from PIL import Image
 from torchvision.transforms import (
@@ -11,7 +12,7 @@ from torchvision.transforms import (
 )
 
 import jaxonmodels.functions as F
-from jaxonmodels.models.clip import CLIP
+from jaxonmodels.models.clip import clip_resnet50
 
 
 def convert_image_to_rgb(image):
@@ -44,30 +45,33 @@ def _transform(n_px):
 # transformer_heads = 8
 # transformer_layers = 12
 
-embed_dim = 1024
+# ResNet
+# embed_dim = 1024
 image_resolution = 224
-vision_layers = (3, 4, 6, 3)
-vision_width = 64
-vision_patch_size = None
-context_length = 77
-vocab_size = 49408
-transformer_width = 512
-transformer_heads = 8
-transformer_layers = 12
+# vision_layers = (3, 4, 6, 3)
+# vision_width = 64
+# vision_patch_size = None
+# context_length = 77
+# vocab_size = 49408
+# transformer_width = 512
+# transformer_heads = 8
+# transformer_layers = 12
 
 
-clip, state = eqx.nn.make_with_state(CLIP)(
-    embed_dim,
-    image_resolution,
-    vision_layers,
-    vision_width,
-    vision_patch_size,
-    context_length,
-    vocab_size,
-    transformer_width,
-    transformer_heads,
-    transformer_layers,
-)
+# clip, state = eqx.nn.make_with_state(CLIP)(
+#     embed_dim,
+#     image_resolution,
+#     vision_layers,
+#     vision_width,
+#     vision_patch_size,
+#     context_length,
+#     vocab_size,
+#     transformer_width,
+#     transformer_heads,
+#     transformer_layers,
+# )
+
+clip, state = clip_resnet50(key=jax.random.key(42), weights="RN50")
 
 text = F.clip_tokenize(["a photo of a human", "a photo of a cat", "a photo of a dog"])
 # text = tokenize(["a photo of a cat"])
