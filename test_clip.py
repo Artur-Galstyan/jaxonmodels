@@ -74,15 +74,15 @@ image_resolution = 224
 # )
 
 
-# text = F.clip_tokenize(["a photo of a human", "a photo of a cat", "a photo of a dog"])
-text = F.clip_tokenize(["a photo of a cat"])
+text = F.clip_tokenize(["a photo of a human", "a photo of a cat", "a photo of a dog"])
+# text = F.clip_tokenize(["a photo of a cat"])
 # print(text)
 transform = _transform(image_resolution)
 image = transform(Image.open("cat.jpg"))  # pyright: ignore
 
 # Add batch dimension to text and image
-text = jnp.expand_dims(text, axis=0)
-image = jnp.expand_dims(jnp.array(image), axis=0)
+# text = jnp.expand_dims(text, axis=0)
+# image = jnp.expand_dims(jnp.array(image), axis=0)
 
 print(f"{text.shape=}, {image.shape=}")
 
@@ -90,7 +90,7 @@ clip, state = clip_resnet50(key=jax.random.key(42), weights="RN50")
 
 clip_pt = functools.partial(clip, inference=True)
 logits_per_image, logits_per_text, state = eqx.filter_vmap(
-    clip_pt, in_axes=(0, 0, None), out_axes=(0, 0, None), axis_name="batch"
+    clip_pt, in_axes=(None, 0, None), out_axes=(0, 0, None), axis_name="batch"
 )(jnp.array(image), text, state)
 print(f"{logits_per_image.shape=}, {logits_per_image=}")
 print(f"{logits_per_text.shape=}, {logits_per_text=}")

@@ -377,12 +377,58 @@ class ResidualAttentionBlock(eqx.Module):
         return self.attn(x, x, x, need_weights=False, attn_mask=attn_mask)[0]
 
     def __call__(self, x: Array, attn_mask: Array | None = None):
-        x = eqx.filter_vmap(self.ln_1)(x)
-        x = x + self._attention(x, attn_mask)
-        x = eqx.filter_vmap(self.c_fc)(x)
-        x = jax.nn.gelu(x, approximate=True)
-        x = eqx.filter_vmap(self.c_proj)(x)
-        x = x + eqx.filter_vmap(self.ln_2)(x)
+        # print(f"ResidualAttentionBlock input shape: {x.shape}")
+        # print(f"Input stats: min={jnp.min(x)}, max={jnp.max(x)}, mean={jnp.mean(x)}")
+
+        # First attention block
+        ln1_out = eqx.filter_vmap(self.ln_1)(x)
+        # print(f"After ln_1 shape: {ln1_out.shape}")
+        # print(
+        #     f"After ln_1 stats: min={jnp.min(ln1_out)}, max={jnp.max(ln1_out)}, mean={jnp.mean(ln1_out)}"  # noqa
+        # )
+        attention_output = self._attention(ln1_out, attn_mask)
+        # print(f"Attention output shape: {attention_output.shape}")
+        # print(
+        #     f"Attention stats: min={jnp.min(attention_output)}, max={jnp.max(attention_output)}, mean={jnp.mean(attention_output)}"  # noqa
+        # )
+        x = x + attention_output
+        # print(f"After residual connection shape: {x.shape}")
+        # print(
+        #     f"After residual stats: min={jnp.min(x)}, max={jnp.max(x)}, mean={jnp.mean(x)}"  # noqa
+        # )
+
+        # Apply LN2 before MLP (not after!)
+        ln_2_output = eqx.filter_vmap(self.ln_2)(x)
+        # print(f"After ln_2 shape: {ln_2_output.shape}")
+        # print(
+        #     f"After ln_2 stats: min={jnp.min(ln_2_output)}, max={jnp.max(ln_2_output)}, mean={jnp.mean(ln_2_output)}" # noqa
+        # )
+
+        # MLP block
+        c_fc_out = eqx.filter_vmap(self.c_fc)(
+            ln_2_output
+        )  # Apply to ln_2_output, not x
+        # print(f"After c_fc shape: {c_fc_out.shape}")
+        # print(
+        #     f"After c_fc stats: min={jnp.min(c_fc_out)}, max={jnp.max(c_fc_out)}, mean={jnp.mean(c_fc_out)}" # noqa
+        # )
+        x_gelu = jax.nn.gelu(c_fc_out)
+        # print(f"After gelu shape: {x_gelu.shape}")
+        # print(
+        #     f"After gelu stats: min={jnp.min(x_gelu)}, max={jnp.max(x_gelu)}, mean={jnp.mean(x_gelu)}" # noqa
+        # )
+        c_proj_out = eqx.filter_vmap(self.c_proj)(x_gelu)
+        # print(f"After c_proj shape: {c_proj_out.shape}")
+        # print(
+        #     f"After c_proj stats: min={jnp.min(c_proj_out)}, max={jnp.max(c_proj_out)}, mean={jnp.mean(c_proj_out)}" # noqa
+        # )
+
+        # Final residual connection
+        x = x + c_proj_out  # Add to x, not to ln_2_output
+        # print(f"Final output shape: {x.shape}")
+        # print(
+        #     f"Final output stats: min={jnp.min(x)}, max={jnp.max(x)}, mean={jnp.mean(x)}" # noqa
+        # )
         return x
 
 
@@ -561,28 +607,53 @@ class CLIP(eqx.Module):
         return self.visual(image, state=state, inference=inference)
 
     def encode_text(self, text: Int[Array, "77"], attn_mask: Array):
-        print(f"Text tokens shape: {text.shape}")
-        print(f"First few tokens: {text[:5]}")  # Should include BOS token
+        # print(f"Text tokens shape: {text.shape}")
+        # print(f"First few tokens: {text[:5]}")  # Should include BOS token
 
         x = eqx.filter_vmap(self.token_embedding)(text)  # [n_ctx, d_model]
-        print(f"Token embeddings shape: {x.shape}")
-        print(
-            f"Token embeddings stats: min={jnp.min(x)}, max={jnp.max(x)}, mean={jnp.mean(x)}"  # noqa
-        )
+        # print(f"Token embeddings shape: {x.shape}")
+        # print(
+        #     f"Token embeddings stats: min={jnp.min(x)}, max={jnp.max(x)}, mean={jnp.mean(x)}"  # noqa
+        # )
         x = x + self.positional_embedding
-        print(
-            f"After adding positional embeddings: min={jnp.min(x)}, max={jnp.max(x)}, mean={jnp.mean(x)}"  # noqa
-        )
+        # print(
+        #     f"After adding positional embeddings: min={jnp.min(x)}, max={jnp.max(x)}, mean={jnp.mean(x)}"  # noqa
+        # )
 
-        print(f"Attention mask shape: {attn_mask.shape}")
-        print(
-            f"Attention mask diagonal[0:5]: {jnp.diagonal(attn_mask)[:5]}"
-        )  # Should be 0s
-        # TODO CONTINUE FROM HERE
+        # print(f"Attention mask shape: {attn_mask.shape}")
+        # print(
+        #     f"Attention mask diagonal[0:5]: {jnp.diagonal(attn_mask)[:5]}"
+        # )  # Should be 0s
         x = self.transformer(x, attn_mask=attn_mask)
-        x = eqx.filter_vmap(self.ln_final)(x)
+        # print(f"After transformer shape: {x.shape}")
+        # print(
+        #     f"After transformer stats: min={jnp.min(x)}, max={jnp.max(x)}, mean={jnp.mean(x)}"  # noqa
+        # )
 
-        x = x[jnp.argmax(text)] @ self.text_projection
+        x = eqx.filter_vmap(self.ln_final)(x)
+        # print(f"After ln_final shape: {x.shape}")
+        # print(
+        #     f"After ln_final stats: min={jnp.min(x)}, max={jnp.max(x)}, mean={jnp.mean(x)}"  # noqa
+        # )
+
+        eot_indices = jnp.argmax(text)
+        # print(f"EOT indices: {eot_indices}")
+
+        # Extract features at EOT position
+        x_at_eot = x[eot_indices]
+        # print(f"Features at EOT shape: {x_at_eot.shape}")
+        # print(
+        #     f"Features at EOT stats: min={jnp.min(x_at_eot)}, max={jnp.max(x_at_eot)}, mean={jnp.mean(x_at_eot)}" # noqa
+        # )
+
+        # Final projection
+        x = x_at_eot @ self.text_projection
+        # print(f"After text projection shape: {x.shape}")
+        # print(
+        #     f"After text projection stats: min={jnp.min(x)}, max={jnp.max(x)}, mean={jnp.mean(x)}" # noqa
+        # )
+
+        # x = x[jnp.argmax(text)] @ self.text_projection
 
         return x
 
