@@ -389,8 +389,10 @@ def clip_tokenize(
 
 
 def build_attention_mask(context_length: int):
-    mask = jnp.full(shape=(context_length, context_length), fill_value=float("-inf"))
-    mask = jnp.triu(mask)
+    mask = jnp.tril(jnp.zeros((context_length, context_length)))
+    upper = jnp.triu(jnp.full((context_length, context_length), float("-inf")), k=1)
+
+    mask = mask + upper
     return mask
 
 

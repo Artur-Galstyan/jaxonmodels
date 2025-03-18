@@ -7,9 +7,11 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import torch
+from beartype.typing import Any
 from jax.tree_util import FlattenedIndexKey, GetAttrKey, KeyPath, SequenceKey
 from jaxtyping import Array, PyTree
 from pydantic import BaseModel
+from tqdm import tqdm
 
 
 class ChunkifiedPytreePath(BaseModel):
@@ -192,10 +194,15 @@ def convert(
     jaxfields: list[JaxField],
     state_indices: dict | None,
     torchfields: list[TorchField],
+    dtype: Any = np.float32,  # todo: support different dtypes
 ) -> PyTree:
     state_dict_np: dict[str, np.ndarray] = {
         k: state_dict[k].detach().numpy() for k in state_dict
     }
+
+    for k in state_dict_np:
+        if np.issubdtype(state_dict_np[k].dtype, np.floating):
+            state_dict_np[k] = state_dict_np[k].astype(np.float32)
 
     if len(torchfields) != len(jaxfields):
         raise ValueError(
@@ -206,7 +213,7 @@ def convert(
     with tempfile.TemporaryDirectory() as tmpdir:
         chunkified_statedict_path = chunkify_state_dict(state_dict_np, tmpdir)
         del state_dict_np, state_dict
-        for t, j in zip(torchfields, jaxfields):
+        for t, j in tqdm(zip(torchfields, jaxfields), total=len(torchfields)):
             if not can_reshape(t.shape, j.shape):
                 raise ValueError(
                     f"Cannot reshape {t.shape} "

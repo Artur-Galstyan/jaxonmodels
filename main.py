@@ -9,9 +9,11 @@ device = "cuda" if torch.cuda.is_available() else "cpu"
 model, preprocess = clip.load("RN50", device=device)
 
 # Prepare your text and image
-text = clip.tokenize(["a photo of a human", "a photo of a cat", "a photo of a dog"]).to(
-    device
-)
+# text = clip.tokenize(["a photo of a human", "a photo of a cat", "a photo of a dog"]).to( # noqa
+#     device
+# )
+
+text = clip.tokenize(["a photo of a cat"]).to(device)
 image = preprocess(Image.open("cat.jpg")).unsqueeze(0).to(device)
 
 # Get features and compute probabilities

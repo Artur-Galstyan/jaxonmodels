@@ -6,11 +6,12 @@ from urllib.request import urlretrieve
 import equinox as eqx
 import jax
 import jax.numpy as jnp
-from beartype.typing import Literal, Type
+from beartype.typing import Any, Literal, Type
 from jaxtyping import Array, Float, Int, PRNGKeyArray
 
 import jaxonmodels.functions as F
 from jaxonmodels.layers.batch_norm import BatchNorm
+from jaxonmodels.layers.multi_head_attention import MultiheadAttention
 from jaxonmodels.statedict2pytree.s2p import (
     convert,
     move_running_fields_to_the_end,
@@ -151,7 +152,7 @@ class Bottleneck(eqx.Module):
         out, state = self.bn3(self.conv3(out), state, inference=inference)
 
         if self.downsample is not None:
-            identity, state = self.downsample(x, state)
+            identity, state = self.downsample(x, state, inference=inference)
 
         out += identity
         out = jax.nn.relu(out)
@@ -342,17 +343,17 @@ class ModifiedResNet(eqx.Module):
             return x, state
 
         x, state = stem(x, state, inference)
-        x, state = self.layer1(x, state)
-        x, state = self.layer2(x, state)
-        x, state = self.layer3(x, state)
-        x, state = self.layer4(x, state)
+        x, state = self.layer1(x, state, inference=inference)
+        x, state = self.layer2(x, state, inference=inference)
+        x, state = self.layer3(x, state, inference=inference)
+        x, state = self.layer4(x, state, inference=inference)
         x = self.attnpool(x)
 
         return x, state
 
 
 class ResidualAttentionBlock(eqx.Module):
-    attn: eqx.nn.MultiheadAttention
+    attn: MultiheadAttention
     ln_1: eqx.nn.LayerNorm
     c_fc: eqx.nn.Linear
     c_proj: eqx.nn.Linear
@@ -366,20 +367,20 @@ class ResidualAttentionBlock(eqx.Module):
         key: PRNGKeyArray,
     ):
         key, *subkeys = jax.random.split(key, 5)
-        self.attn = eqx.nn.MultiheadAttention(n_head, d_model, key=subkeys[0])
+        self.attn = MultiheadAttention(d_model, n_head, key=subkeys[0])
         self.ln_1 = eqx.nn.LayerNorm(d_model)
         self.c_fc = eqx.nn.Linear(d_model, d_model * 4, key=subkeys[1])
         self.c_proj = eqx.nn.Linear(d_model * 4, d_model, key=subkeys[2])
         self.ln_2 = eqx.nn.LayerNorm(d_model)
 
     def _attention(self, x: Array, attn_mask: Array | None = None):
-        return self.attn(x, x, x, mask=attn_mask)
+        return self.attn(x, x, x, need_weights=False, attn_mask=attn_mask)[0]
 
     def __call__(self, x: Array, attn_mask: Array | None = None):
         x = eqx.filter_vmap(self.ln_1)(x)
         x = x + self._attention(x, attn_mask)
         x = eqx.filter_vmap(self.c_fc)(x)
-        x = jax.nn.gelu(x)
+        x = jax.nn.gelu(x, approximate=True)
         x = eqx.filter_vmap(self.c_proj)(x)
         x = x + eqx.filter_vmap(self.ln_2)(x)
         return x
@@ -453,9 +454,9 @@ class VisionTransformer(eqx.Module):
         state: eqx.nn.State | None = None,
         inference: bool = False,
     ):
-        x = self.conv1(x)  # shape = [channel, grid, grid]
-        x = x.reshape(x.shape[0], -1)  # shape = [channel, grid ** 2]
-        x = jnp.transpose(x)  # shape = [*, grid ** 2, width]
+        x = self.conv1(x)
+        x = x.reshape(x.shape[0], -1)
+        x = jnp.transpose(x)
 
         x = jnp.concatenate(
             [
@@ -501,6 +502,7 @@ class CLIP(eqx.Module):
         transformer_layers: int,
         *,
         key: PRNGKeyArray | None = None,
+        dtype: Any | None = None,  # todo: set target dtype
     ):
         self.context_length = context_length
         if key is None:
@@ -559,13 +561,28 @@ class CLIP(eqx.Module):
         return self.visual(image, state=state, inference=inference)
 
     def encode_text(self, text: Int[Array, "77"], attn_mask: Array):
-        x = eqx.filter_vmap(self.token_embedding)(text)  # [n_ctx, d_model]
+        print(f"Text tokens shape: {text.shape}")
+        print(f"First few tokens: {text[:5]}")  # Should include BOS token
 
+        x = eqx.filter_vmap(self.token_embedding)(text)  # [n_ctx, d_model]
+        print(f"Token embeddings shape: {x.shape}")
+        print(
+            f"Token embeddings stats: min={jnp.min(x)}, max={jnp.max(x)}, mean={jnp.mean(x)}"  # noqa
+        )
         x = x + self.positional_embedding
+        print(
+            f"After adding positional embeddings: min={jnp.min(x)}, max={jnp.max(x)}, mean={jnp.mean(x)}"  # noqa
+        )
+
+        print(f"Attention mask shape: {attn_mask.shape}")
+        print(
+            f"Attention mask diagonal[0:5]: {jnp.diagonal(attn_mask)[:5]}"
+        )  # Should be 0s
+        # TODO CONTINUE FROM HERE
         x = self.transformer(x, attn_mask=attn_mask)
         x = eqx.filter_vmap(self.ln_final)(x)
 
-        x = x[jnp.argmax(text, axis=-1)] @ self.text_projection
+        x = x[jnp.argmax(text)] @ self.text_projection
 
         return x
 
@@ -575,18 +592,25 @@ class CLIP(eqx.Module):
         text: Int[Array, "1 77"],
         state: eqx.nn.State | None,
         attn_mask: Array | None = None,
+        inference: bool = False,
     ):
-        image_features, state = self.encode_image(image, state)
+        image_features, state = self.encode_image(image, state, inference=inference)
         text = text.reshape(-1)
         if attn_mask is None:
             attn_mask = F.build_attention_mask(self.context_length)
         text_features = self.encode_text(text, attn_mask)
 
-        image_features = jnp.linalg.norm(image_features / image_features, keepdims=True)
-        text_features = jnp.linalg.norm(text_features / text_features, keepdims=True)
+        print(f"{image_features=}")
+        print(f"{text_features=}")
 
+        image_norm = jnp.linalg.norm(image_features, axis=-1, keepdims=True)
+        text_norm = jnp.linalg.norm(text_features, axis=-1, keepdims=True)
+        normalized_image = image_features / image_norm
+        normalized_text = text_features / text_norm
+
+        # Calculate similarity with normalized features
         logit_scale = jnp.exp(self.logit_scale)
-        logits_per_image = logit_scale * image_features @ text_features.T
+        logits_per_image = logit_scale * (normalized_image @ normalized_text.T)
         logits_per_text = logits_per_image.T
 
         return logits_per_image, logits_per_text, state
@@ -617,9 +641,7 @@ def _with_weights(init_func):
 
             import torch
 
-            model = torch.load(
-                weights_file, map_location=torch.device("cpu"), weights_only=False
-            )
+            model = torch.jit.load(weights_file, map_location=torch.device("cpu"))
             weights_dict = {}
             for name, param in model.named_parameters():
                 weights_dict[name] = param.clone().detach()
@@ -633,7 +655,7 @@ def _with_weights(init_func):
             torchfields = move_running_fields_to_the_end(torchfields)
             jaxfields, state_indices = pytree_to_fields((clip, state))
 
-            resnet, state = convert(
+            clip, state = convert(
                 weights_dict, (clip, state), jaxfields, state_indices, torchfields
             )
 

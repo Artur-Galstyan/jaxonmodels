@@ -125,7 +125,6 @@ class MultiheadAttention(eqx.Module):
             other_name="attn_mask",
             target_type=query.dtype,
         )
-
         attn_mask = F.canonical_mask(
             mask=attn_mask,
             mask_name="attn_mask",

@@ -1,3 +1,5 @@
+import functools
+
 import equinox as eqx
 import jax
 import jax.numpy as jnp
@@ -71,22 +73,39 @@ image_resolution = 224
 #     transformer_layers,
 # )
 
-clip, state = clip_resnet50(key=jax.random.key(42), weights="RN50")
 
-text = F.clip_tokenize(["a photo of a human", "a photo of a cat", "a photo of a dog"])
-# text = tokenize(["a photo of a cat"])
+# text = F.clip_tokenize(["a photo of a human", "a photo of a cat", "a photo of a dog"])
+text = F.clip_tokenize(["a photo of a cat"])
 # print(text)
 transform = _transform(image_resolution)
 image = transform(Image.open("cat.jpg"))  # pyright: ignore
 
+# Add batch dimension to text and image
+text = jnp.expand_dims(text, axis=0)
+image = jnp.expand_dims(jnp.array(image), axis=0)
+
+print(f"{text.shape=}, {image.shape=}")
+
+clip, state = clip_resnet50(key=jax.random.key(42), weights="RN50")
+
+clip_pt = functools.partial(clip, inference=True)
 logits_per_image, logits_per_text, state = eqx.filter_vmap(
-    clip, in_axes=(None, 0, None), out_axes=(0, 0, None), axis_name="batch"
+    clip_pt, in_axes=(0, 0, None), out_axes=(0, 0, None), axis_name="batch"
 )(jnp.array(image), text, state)
-print(f"{logits_per_image.shape}=")
-print(f"{logits_per_text.shape}=")
+print(f"{logits_per_image.shape=}, {logits_per_image=}")
+print(f"{logits_per_text.shape=}, {logits_per_text=}")
 
 # image = transform(Image.open("cat.jpg")).unsqueeze(0)  # pyright: ignore
 
 # output, state = eqx.filter_vmap(
 #     clip, in_axes=(0, None, None), out_axes=(0, None), axis_name="batch"
 # )(jnp.array(image), text, state)
+
+image_probs = jax.nn.softmax(logits_per_image)
+
+# Get probabilities for each text option
+probs = image_probs
+options = ["human", "cat", "dog"]
+
+for option, prob in zip(options, probs):
+    print(f"Probability that the image is a {option}: {prob * 100:.2f}%")
