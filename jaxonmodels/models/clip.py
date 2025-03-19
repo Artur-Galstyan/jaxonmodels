@@ -1,13 +1,12 @@
 import os
-from functools import wraps
 from pathlib import Path
 from urllib.request import urlretrieve
 
 import equinox as eqx
 import jax
 import jax.numpy as jnp
-from beartype.typing import Any, Literal, Type
-from jaxtyping import Array, Float, Int, PRNGKeyArray
+from beartype.typing import Any, Literal
+from jaxtyping import Array, Float, Int, PRNGKeyArray, PyTree
 
 import jaxonmodels.functions as F
 from jaxonmodels.layers.batch_norm import BatchNorm
@@ -377,58 +376,14 @@ class ResidualAttentionBlock(eqx.Module):
         return self.attn(x, x, x, need_weights=False, attn_mask=attn_mask)[0]
 
     def __call__(self, x: Array, attn_mask: Array | None = None):
-        # print(f"ResidualAttentionBlock input shape: {x.shape}")
-        # print(f"Input stats: min={jnp.min(x)}, max={jnp.max(x)}, mean={jnp.mean(x)}")
-
-        # First attention block
         ln1_out = eqx.filter_vmap(self.ln_1)(x)
-        # print(f"After ln_1 shape: {ln1_out.shape}")
-        # print(
-        #     f"After ln_1 stats: min={jnp.min(ln1_out)}, max={jnp.max(ln1_out)}, mean={jnp.mean(ln1_out)}"  # noqa
-        # )
         attention_output = self._attention(ln1_out, attn_mask)
-        # print(f"Attention output shape: {attention_output.shape}")
-        # print(
-        #     f"Attention stats: min={jnp.min(attention_output)}, max={jnp.max(attention_output)}, mean={jnp.mean(attention_output)}"  # noqa
-        # )
         x = x + attention_output
-        # print(f"After residual connection shape: {x.shape}")
-        # print(
-        #     f"After residual stats: min={jnp.min(x)}, max={jnp.max(x)}, mean={jnp.mean(x)}"  # noqa
-        # )
-
-        # Apply LN2 before MLP (not after!)
         ln_2_output = eqx.filter_vmap(self.ln_2)(x)
-        # print(f"After ln_2 shape: {ln_2_output.shape}")
-        # print(
-        #     f"After ln_2 stats: min={jnp.min(ln_2_output)}, max={jnp.max(ln_2_output)}, mean={jnp.mean(ln_2_output)}" # noqa
-        # )
-
-        # MLP block
-        c_fc_out = eqx.filter_vmap(self.c_fc)(
-            ln_2_output
-        )  # Apply to ln_2_output, not x
-        # print(f"After c_fc shape: {c_fc_out.shape}")
-        # print(
-        #     f"After c_fc stats: min={jnp.min(c_fc_out)}, max={jnp.max(c_fc_out)}, mean={jnp.mean(c_fc_out)}" # noqa
-        # )
+        c_fc_out = eqx.filter_vmap(self.c_fc)(ln_2_output)
         x_gelu = jax.nn.gelu(c_fc_out)
-        # print(f"After gelu shape: {x_gelu.shape}")
-        # print(
-        #     f"After gelu stats: min={jnp.min(x_gelu)}, max={jnp.max(x_gelu)}, mean={jnp.mean(x_gelu)}" # noqa
-        # )
         c_proj_out = eqx.filter_vmap(self.c_proj)(x_gelu)
-        # print(f"After c_proj shape: {c_proj_out.shape}")
-        # print(
-        #     f"After c_proj stats: min={jnp.min(c_proj_out)}, max={jnp.max(c_proj_out)}, mean={jnp.mean(c_proj_out)}" # noqa
-        # )
-
-        # Final residual connection
         x = x + c_proj_out  # Add to x, not to ln_2_output
-        # print(f"Final output shape: {x.shape}")
-        # print(
-        #     f"Final output stats: min={jnp.min(x)}, max={jnp.max(x)}, mean={jnp.mean(x)}" # noqa
-        # )
         return x
 
 
@@ -451,13 +406,13 @@ class Transformer(eqx.Module):
 
 
 class VisionTransformer(eqx.Module):
-    conv1: eqx.nn.Conv2d
     class_embedding: Array
     positional_embedding: Array
+    proj: Array
+    conv1: eqx.nn.Conv2d
     ln_pre: eqx.nn.LayerNorm
     transformer: Transformer
     ln_post: eqx.nn.LayerNorm
-    proj: Array
 
     def __init__(
         self,
@@ -607,53 +562,15 @@ class CLIP(eqx.Module):
         return self.visual(image, state=state, inference=inference)
 
     def encode_text(self, text: Int[Array, "77"], attn_mask: Array):
-        # print(f"Text tokens shape: {text.shape}")
-        # print(f"First few tokens: {text[:5]}")  # Should include BOS token
-
         x = eqx.filter_vmap(self.token_embedding)(text)  # [n_ctx, d_model]
-        # print(f"Token embeddings shape: {x.shape}")
-        # print(
-        #     f"Token embeddings stats: min={jnp.min(x)}, max={jnp.max(x)}, mean={jnp.mean(x)}"  # noqa
-        # )
         x = x + self.positional_embedding
-        # print(
-        #     f"After adding positional embeddings: min={jnp.min(x)}, max={jnp.max(x)}, mean={jnp.mean(x)}"  # noqa
-        # )
-
-        # print(f"Attention mask shape: {attn_mask.shape}")
-        # print(
-        #     f"Attention mask diagonal[0:5]: {jnp.diagonal(attn_mask)[:5]}"
-        # )  # Should be 0s
         x = self.transformer(x, attn_mask=attn_mask)
-        # print(f"After transformer shape: {x.shape}")
-        # print(
-        #     f"After transformer stats: min={jnp.min(x)}, max={jnp.max(x)}, mean={jnp.mean(x)}"  # noqa
-        # )
-
         x = eqx.filter_vmap(self.ln_final)(x)
-        # print(f"After ln_final shape: {x.shape}")
-        # print(
-        #     f"After ln_final stats: min={jnp.min(x)}, max={jnp.max(x)}, mean={jnp.mean(x)}"  # noqa
-        # )
 
         eot_indices = jnp.argmax(text)
-        # print(f"EOT indices: {eot_indices}")
 
-        # Extract features at EOT position
         x_at_eot = x[eot_indices]
-        # print(f"Features at EOT shape: {x_at_eot.shape}")
-        # print(
-        #     f"Features at EOT stats: min={jnp.min(x_at_eot)}, max={jnp.max(x_at_eot)}, mean={jnp.mean(x_at_eot)}" # noqa
-        # )
-
-        # Final projection
         x = x_at_eot @ self.text_projection
-        # print(f"After text projection shape: {x.shape}")
-        # print(
-        #     f"After text projection stats: min={jnp.min(x)}, max={jnp.max(x)}, mean={jnp.mean(x)}" # noqa
-        # )
-
-        # x = x[jnp.argmax(text)] @ self.text_projection
 
         return x
 
@@ -687,60 +604,9 @@ class CLIP(eqx.Module):
         return logits_per_image, logits_per_text, state
 
 
-def _with_weights(init_func):
-    @wraps(init_func)
-    def wrapper(key, weights=None, cache: bool = True, *args, **kwargs):
-        clip, state = init_func(key, *args, **kwargs)
-        if weights is not None:
-            weights_url = _MODELS.get(weights)
-            if weights_url is None:
-                raise ValueError(f"No weights found for {weights}")
-            jaxonmodels_dir = os.path.expanduser("~/.jaxonmodels/models")
-            os.makedirs(jaxonmodels_dir, exist_ok=True)
-
-            if cache:
-                if os.path.exists(str(Path(jaxonmodels_dir) / f"{weights}.eqx")):
-                    return eqx.tree_deserialise_leaves(
-                        str(Path(jaxonmodels_dir) / f"{weights}.eqx"), (clip, state)
-                    )
-            weights_dir = os.path.expanduser("~/.jaxonmodels/pytorch_weights")
-            os.makedirs(weights_dir, exist_ok=True)
-            filename = weights_url.split("/")[-1]
-            weights_file = os.path.join(weights_dir, filename)
-            if not os.path.exists(weights_file):
-                urlretrieve(weights_url, weights_file)
-
-            import torch
-
-            model = torch.jit.load(weights_file, map_location=torch.device("cpu"))
-            weights_dict = {}
-            for name, param in model.named_parameters():
-                weights_dict[name] = param.clone().detach()
-            for name, buffer in model.named_buffers():
-                weights_dict[name] = buffer.clone().detach()
-            weights_dict["logit_scale"] = torch.Tensor(
-                [model.logit_scale.clone().detach()]
-            )
-
-            torchfields = state_dict_to_fields(weights_dict)
-            torchfields = move_running_fields_to_the_end(torchfields)
-            jaxfields, state_indices = pytree_to_fields((clip, state))
-
-            clip, state = convert(
-                weights_dict, (clip, state), jaxfields, state_indices, torchfields
-            )
-
-            if cache:
-                serialize_pytree(
-                    (clip, state), str(Path(jaxonmodels_dir) / f"{weights}.eqx")
-                )
-        return clip, state
-
-    return wrapper
-
-
-Weights = Type[
-    Literal[
+def _with_weights(
+    pytree: PyTree,
+    model: Literal[
         "RN50",
         "RN101",
         "RN50x4",
@@ -750,16 +616,61 @@ Weights = Type[
         "ViT-B/16",
         "ViT-L/14",
         "ViT-L/14@336px",
-    ]
-]
-
-
-@_with_weights
-def clip_resnet50(
-    key: PRNGKeyArray | None = None, weights: Literal["RN50"] | None = None
+    ],
+    cache: bool,
 ):
-    if key is None:
-        key = jax.random.key(42)
+    clip, state = pytree
+    if model is not None:
+        weights_url = _MODELS.get(model)
+        if weights_url is None:
+            raise ValueError(f"No model found for {model}")
+        jaxonmodels_dir = os.path.expanduser("~/.jaxonmodels/models")
+        os.makedirs(jaxonmodels_dir, exist_ok=True)
+
+        if cache:
+            if os.path.exists(
+                str(Path(jaxonmodels_dir) / f"{model.replace('/', '_')}.eqx")
+            ):
+                return eqx.tree_deserialise_leaves(
+                    str(Path(jaxonmodels_dir) / f"{model.replace('/', '_')}.eqx"),
+                    (clip, state),
+                )
+        weights_dir = os.path.expanduser("~/.jaxonmodels/pytorch_weights")
+        os.makedirs(weights_dir, exist_ok=True)
+        filename = weights_url.split("/")[-1].replace("/", "_")
+        weights_file = os.path.join(weights_dir, filename)
+        if not os.path.exists(weights_file):
+            urlretrieve(weights_url, weights_file)
+
+        import torch
+
+        torch_model = torch.jit.load(weights_file, map_location=torch.device("cpu"))
+        weights_dict = {}
+        for name, param in torch_model.named_parameters():
+            weights_dict[name] = param.clone().detach()
+        for name, buffer in torch_model.named_buffers():
+            weights_dict[name] = buffer.clone().detach()
+        weights_dict["logit_scale"] = torch.Tensor(
+            [torch_model.logit_scale.clone().detach()]
+        )
+
+        torchfields = state_dict_to_fields(weights_dict)
+        torchfields = move_running_fields_to_the_end(torchfields)
+        jaxfields, state_indices = pytree_to_fields((clip, state))
+
+        clip, state = convert(
+            weights_dict, (clip, state), jaxfields, state_indices, torchfields
+        )
+
+        if cache:
+            serialize_pytree(
+                (clip, state),
+                str(Path(jaxonmodels_dir) / f"{model.replace('/', '_')}.eqx"),
+            )
+    return clip, state
+
+
+def _clip_resnet50(key: PRNGKeyArray):
     embed_dim = 1024
     image_resolution = 224
     vision_layers = (3, 4, 6, 3)
@@ -788,6 +699,285 @@ def clip_resnet50(
     return clip, state
 
 
-@_with_weights
-def clip(key: PRNGKeyArray, weights: Weights | None = None):
-    pass
+def _clip_resnet101(key: PRNGKeyArray):
+    embed_dim = 512
+    image_resolution = 224
+    vision_layers = (3, 4, 23, 3)
+    vision_width = 64
+    vision_patch_size = None
+    context_length = 77
+    vocab_size = 49408
+    transformer_width = 512
+    transformer_heads = 8
+    transformer_layers = 12
+
+    clip, state = eqx.nn.make_with_state(CLIP)(
+        embed_dim,
+        image_resolution,
+        vision_layers,
+        vision_width,
+        vision_patch_size,
+        context_length,
+        vocab_size,
+        transformer_width,
+        transformer_heads,
+        transformer_layers,
+        key=key,
+    )
+
+    return clip, state
+
+
+def _clip_rn50x4(key: PRNGKeyArray):
+    embed_dim = 640
+    image_resolution = 288
+    vision_layers = (4, 6, 10, 6)
+    vision_width = 80
+    vision_patch_size = None
+    context_length = 77
+    vocab_size = 49408
+    transformer_width = 640
+    transformer_heads = 10
+    transformer_layers = 12
+
+    clip, state = eqx.nn.make_with_state(CLIP)(
+        embed_dim,
+        image_resolution,
+        vision_layers,
+        vision_width,
+        vision_patch_size,
+        context_length,
+        vocab_size,
+        transformer_width,
+        transformer_heads,
+        transformer_layers,
+        key=key,
+    )
+
+    return clip, state
+
+
+def _clip_rn50x16(key: PRNGKeyArray):
+    embed_dim = 768
+    image_resolution = 384
+    vision_layers = (6, 8, 18, 8)
+    vision_width = 96
+    vision_patch_size = None
+    context_length = 77
+    vocab_size = 49408
+    transformer_width = 768
+    transformer_heads = 12
+    transformer_layers = 12
+
+    clip, state = eqx.nn.make_with_state(CLIP)(
+        embed_dim,
+        image_resolution,
+        vision_layers,
+        vision_width,
+        vision_patch_size,
+        context_length,
+        vocab_size,
+        transformer_width,
+        transformer_heads,
+        transformer_layers,
+        key=key,
+    )
+
+    return clip, state
+
+
+def _clip_rn50x64(key: PRNGKeyArray):
+    embed_dim = 1024
+    image_resolution = 448
+    vision_layers = (3, 15, 36, 10)
+    vision_width = 128
+    vision_patch_size = None
+    context_length = 77
+    vocab_size = 49408
+    transformer_width = 1024
+    transformer_heads = 16
+    transformer_layers = 12
+
+    clip, state = eqx.nn.make_with_state(CLIP)(
+        embed_dim,
+        image_resolution,
+        vision_layers,
+        vision_width,
+        vision_patch_size,
+        context_length,
+        vocab_size,
+        transformer_width,
+        transformer_heads,
+        transformer_layers,
+        key=key,
+    )
+
+    return clip, state
+
+
+def _clip_vit_b_16(key: PRNGKeyArray):
+    embed_dim = 512
+    image_resolution = 224
+    vision_layers = 12
+    vision_width = 768
+    vision_patch_size = 16
+    context_length = 77
+    vocab_size = 49408
+    transformer_width = 512
+    transformer_heads = 8
+    transformer_layers = 12
+
+    clip, state = eqx.nn.make_with_state(CLIP)(
+        embed_dim,
+        image_resolution,
+        vision_layers,
+        vision_width,
+        vision_patch_size,
+        context_length,
+        vocab_size,
+        transformer_width,
+        transformer_heads,
+        transformer_layers,
+        key=key,
+    )
+
+    return clip, state
+
+
+def _clip_vit_b_32(key: PRNGKeyArray):
+    embed_dim = 512
+    image_resolution = 224
+    vision_layers = 12
+    vision_width = 768
+    vision_patch_size = 32
+    context_length = 77
+    vocab_size = 49408
+    transformer_width = 512
+    transformer_heads = 8
+    transformer_layers = 12
+
+    clip, state = eqx.nn.make_with_state(CLIP)(
+        embed_dim,
+        image_resolution,
+        vision_layers,
+        vision_width,
+        vision_patch_size,
+        context_length,
+        vocab_size,
+        transformer_width,
+        transformer_heads,
+        transformer_layers,
+        key=key,
+    )
+
+    return clip, state
+
+
+def _clip_vit_l_14(key: PRNGKeyArray):
+    embed_dim = 768
+    image_resolution = 224
+    vision_layers = 24
+    vision_width = 1024
+    vision_patch_size = 14
+    context_length = 77
+    vocab_size = 49408
+    transformer_width = 768
+    transformer_heads = 12
+    transformer_layers = 12
+
+    clip, state = eqx.nn.make_with_state(CLIP)(
+        embed_dim,
+        image_resolution,
+        vision_layers,
+        vision_width,
+        vision_patch_size,
+        context_length,
+        vocab_size,
+        transformer_width,
+        transformer_heads,
+        transformer_layers,
+        key=key,
+    )
+
+    return clip, state
+
+
+def _clip_vit_l_14_336px(key: PRNGKeyArray):
+    embed_dim = 768
+    image_resolution = 336
+    vision_layers = 24
+    vision_width = 1024
+    vision_patch_size = 14
+    context_length = 77
+    vocab_size = 49408
+    transformer_width = 768
+    transformer_heads = 12
+    transformer_layers = 12
+
+    clip, state = eqx.nn.make_with_state(CLIP)(
+        embed_dim,
+        image_resolution,
+        vision_layers,
+        vision_width,
+        vision_patch_size,
+        context_length,
+        vocab_size,
+        transformer_width,
+        transformer_heads,
+        transformer_layers,
+        key=key,
+    )
+
+    return clip, state
+
+
+def load_clip(
+    model: Literal[
+        "RN50",
+        "RN101",
+        "RN50x4",
+        "RN50x16",
+        "RN50x64",
+        "ViT-B/32",
+        "ViT-B/16",
+        "ViT-L/14",
+        "ViT-L/14@336px",
+    ],
+    with_weights: bool = False,
+    cache: bool = True,
+    *,
+    key: PRNGKeyArray | None = None,
+):
+    if key is None:
+        key = jax.random.key(42)
+    clip, state = None, None
+
+    match model:
+        case "RN50":
+            clip, state = _clip_resnet50(key=key)
+        case "RN101":
+            clip, state = _clip_resnet101(key=key)
+        case "RN50x4":
+            clip, state = _clip_rn50x4(key=key)
+        case "RN50x16":
+            clip, state = _clip_rn50x16(key=key)
+        case "RN50x64":
+            clip, state = _clip_rn50x64(key=key)
+        case "ViT-B/32":
+            clip, state = _clip_vit_b_32(key=key)
+        case "ViT-B/16":
+            clip, state = _clip_vit_b_16(key=key)
+        case "ViT-L/14":
+            clip, state = _clip_vit_l_14(key=key)
+        case "ViT-L/14@336px":
+            clip, state = _clip_vit_l_14_336px(key=key)
+
+    if clip is None or state is None:
+        raise ValueError(f"Unrecognised model passed: {model}")
+
+    if with_weights:
+        clip, state = _with_weights((clip, state), model, cache)
+
+    assert clip is not None
+    assert state is not None
+    return clip, state

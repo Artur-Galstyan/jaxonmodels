@@ -6,7 +6,10 @@ from PIL import Image
 # Load the model
 device = "cuda" if torch.cuda.is_available() else "cpu"
 # model, preprocess = clip.load("ViT-B/32", device=device)
-model, preprocess = clip.load("RN50", device=device)
+# model, preprocess = clip.load("RN50", device=device)
+# model, preprocess = clip.load("RN101", device=device)
+# model, preprocess = clip.load("RN50x16", device=device)
+model, preprocess = clip.load("ViT-L/14@336px", device=device)
 
 # Prepare your text and image
 # text = clip.tokenize(["a photo of a human", "a photo of a cat", "a photo of a dog"]).to( # noqa
