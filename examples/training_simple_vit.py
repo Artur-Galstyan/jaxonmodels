@@ -20,8 +20,8 @@ class Model(eqx.Module):
         self.vit = VisionTransformer(
             input_resolution=32,
             patch_size=2,
-            width=768,
-            layers=3,
+            width=512,
+            layers=2,
             heads=4,
             output_dim=128,
             key=subkey,
@@ -70,7 +70,7 @@ def preprocess_image(image, label):
 
 
 # Set batch size and other parameters
-BATCH_SIZE = 128
+BATCH_SIZE = 32
 AUTOTUNE = tf.data.AUTOTUNE
 
 train_ds = train_ds.map(preprocess_image, num_parallel_calls=AUTOTUNE)
@@ -125,9 +125,11 @@ def eval(model: Model, test_dataset, key: PRNGKeyArray) -> TrainMetrics:
     eval_metrics = TrainMetrics.empty()
     for x, y in test_dataset:
         y = jnp.array(y, dtype=jnp.int32)
-        loss, (logits, state) = loss_fn(model, x, y)
+        loss, (logits) = loss_fn(model, x, y)
         eval_metrics = eval_metrics.merge(
-            TrainMetrics.single_from_model_output(logits=logits, labels=y, loss=loss)
+            TrainMetrics.single_from_model_output(
+                logits=logits, labels=jnp.argmax(y, axis=1), loss=loss
+            )
         )
 
     return eval_metrics
@@ -136,8 +138,8 @@ def eval(model: Model, test_dataset, key: PRNGKeyArray) -> TrainMetrics:
 train_metrics = TrainMetrics.empty()
 
 learning_rate = 0.1
-weight_decay = 5e-4
-optimizer = optax.sgd(learning_rate)
+# weight_decay = 5e-4
+optimizer = optax.adam(learning_rate)
 
 opt_state = optimizer.init(eqx.filter(model, eqx.is_array))
 
@@ -154,7 +156,9 @@ for epoch in range(n_epochs):
         y = jnp.array(y, dtype=jnp.int32)
         model, opt_state, loss, logits = step(model, x, y, optimizer, opt_state)
         train_metrics = train_metrics.merge(
-            TrainMetrics.single_from_model_output(logits=logits, labels=y, loss=loss)
+            TrainMetrics.single_from_model_output(
+                logits=logits, labels=jnp.argmax(y, axis=1), loss=loss
+            )
         )
 
         vals = train_metrics.compute()
