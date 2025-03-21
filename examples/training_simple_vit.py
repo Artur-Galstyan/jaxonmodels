@@ -1,3 +1,5 @@
+import functools
+
 import equinox as eqx
 import jax
 import jax.numpy as jnp
@@ -10,32 +12,52 @@ from tqdm import tqdm
 
 from jaxonmodels.models.vit import VisionTransformer
 
+tf.config.set_visible_devices([], "GPU")
+
 
 class Model(eqx.Module):
     vit: VisionTransformer
+    norm: eqx.nn.LayerNorm
+    dropout: eqx.nn.Dropout
     mlp: eqx.nn.MLP
 
     def __init__(self, key: PRNGKeyArray):
-        key, subkey = jax.random.split(key)
+        key, subkey, subkey2 = jax.random.split(key, 3)
         self.vit = VisionTransformer(
             input_resolution=32,
-            patch_size=2,
-            width=512,
-            layers=2,
-            heads=4,
-            output_dim=128,
+            patch_size=2,  # Small patches capture fine details
+            width=768,  # Large embedding dimension for better capacity
+            layers=8,  # Deep model for hierarchical feature learning
+            heads=12,  # Multiple attention heads (64 dims per head)
+            output_dim=384,
             key=subkey,
         )
 
-        key, subkey = jax.random.split(key)
+        self.norm = eqx.nn.LayerNorm(shape=(384,), use_bias=True)
+
+        self.dropout = eqx.nn.Dropout(p=0.1)
+
         self.mlp = eqx.nn.MLP(
-            in_size=128, width_size=64, out_size=10, depth=3, key=subkey
+            in_size=384,
+            width_size=512,
+            out_size=10,
+            depth=2,
+            activation=jax.nn.gelu,
+            key=subkey2,
         )
 
-    def __call__(self, x):
-        encodings = self.vit(x)
-        output = self.mlp(encodings)
-        return output
+    def __call__(
+        self,
+        x: jnp.ndarray,
+        *,
+        key: PRNGKeyArray | None = None,
+        inference: bool = False,
+    ) -> jnp.ndarray:
+        x = self.vit(x)
+        x = self.norm(x)
+        x = self.dropout(x, inference=inference, key=key)
+        x = self.mlp(x)
+        return x
 
 
 # Set random seed for reproducibility
@@ -69,11 +91,27 @@ def preprocess_image(image, label):
     return image, label
 
 
-# Set batch size and other parameters
+def augment_image(image, label):
+    # Random horizontal flip
+    image = tf.image.random_flip_left_right(image)
+
+    # Random brightness adjustment
+    image = tf.image.random_brightness(image, max_delta=0.2)
+
+    # Random contrast adjustment
+    image = tf.image.random_contrast(image, lower=0.8, upper=1.2)
+
+    # Ensure pixel values remain in [0, 1]
+    image = tf.clip_by_value(image, 0.0, 1.0)
+
+    return image, label
+
+
 BATCH_SIZE = 32
 AUTOTUNE = tf.data.AUTOTUNE
 
 train_ds = train_ds.map(preprocess_image, num_parallel_calls=AUTOTUNE)
+train_ds_augmented = train_ds.map(augment_image, num_parallel_calls=AUTOTUNE)
 train_ds = train_ds.cache()
 train_ds = train_ds.shuffle(buffer_size=10000)
 train_ds = train_ds.batch(BATCH_SIZE)
@@ -94,7 +132,10 @@ def loss_fn(
     model: Model,
     x: Float[Array, "b c h w"],
     y: Int[Array, "b 10"],
+    key: PRNGKeyArray | None,
+    inference: bool = False,
 ) -> tuple[Array, Array]:
+    model = functools.partial(model, inference=inference, key=key)  # pyright: ignore
     logits = eqx.filter_vmap(model)(x)
     loss = optax.softmax_cross_entropy(logits, y)
     return jnp.mean(loss), logits
@@ -107,9 +148,10 @@ def step(
     y: Array,
     optimizer: optax.GradientTransformation,
     opt_state: optax.OptState,
+    key: PRNGKeyArray,
 ):
     (loss_value, (logits)), grads = eqx.filter_value_and_grad(loss_fn, has_aux=True)(
-        model, x, y
+        model, x, y, key
     )
     updates, opt_state = optimizer.update(grads, opt_state, model)
     model = eqx.apply_updates(model, updates)
@@ -125,7 +167,7 @@ def eval(model: Model, test_dataset, key: PRNGKeyArray) -> TrainMetrics:
     eval_metrics = TrainMetrics.empty()
     for x, y in test_dataset:
         y = jnp.array(y, dtype=jnp.int32)
-        loss, (logits) = loss_fn(model, x, y)
+        loss, (logits) = loss_fn(model, x, y, inference=True, key=None)
         eval_metrics = eval_metrics.merge(
             TrainMetrics.single_from_model_output(
                 logits=logits, labels=jnp.argmax(y, axis=1), loss=loss
@@ -154,7 +196,8 @@ for epoch in range(n_epochs):
     for i, (x, y) in pbar:
         x = jnp.array(x)
         y = jnp.array(y, dtype=jnp.int32)
-        model, opt_state, loss, logits = step(model, x, y, optimizer, opt_state)
+        key, subkey = jax.random.split(key)
+        model, opt_state, loss, logits = step(model, x, y, optimizer, opt_state, key)
         train_metrics = train_metrics.merge(
             TrainMetrics.single_from_model_output(
                 logits=logits, labels=jnp.argmax(y, axis=1), loss=loss
