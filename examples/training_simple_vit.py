@@ -8,6 +8,7 @@ import tensorflow as tf
 import tensorflow_datasets as tfds
 from clu import metrics
 from jaxtyping import Array, Float, Int, PRNGKeyArray, PyTree
+from optax import contrib
 from tqdm import tqdm
 
 from jaxonmodels.models.vit import VisionTransformer
@@ -26,20 +27,19 @@ class Model(eqx.Module):
         self.vit = VisionTransformer(
             input_resolution=32,
             patch_size=2,  # Small patches capture fine details
-            width=768,  # Large embedding dimension for better capacity
-            layers=8,  # Deep model for hierarchical feature learning
-            heads=12,  # Multiple attention heads (64 dims per head)
-            output_dim=384,
+            width=192,
+            layers=4,  # Deep model for hierarchical feature learning
+            heads=4,  # Multiple attention heads (64 dims per head)
+            output_dim=64,
             key=subkey,
         )
 
-        self.norm = eqx.nn.LayerNorm(shape=(384,), use_bias=True)
+        self.norm = eqx.nn.LayerNorm(shape=(64,), use_bias=True)
 
-        self.dropout = eqx.nn.Dropout(p=0.1)
-
+        self.dropout = eqx.nn.Dropout(p=0.2)
         self.mlp = eqx.nn.MLP(
-            in_size=384,
-            width_size=512,
+            in_size=64,
+            width_size=64,
             out_size=10,
             depth=2,
             activation=jax.nn.gelu,
@@ -92,26 +92,40 @@ def preprocess_image(image, label):
 
 
 def augment_image(image, label):
-    # Random horizontal flip
-    image = tf.image.random_flip_left_right(image)
+    # NOTE: Ensure your augmentation functions work with the correct image format
+    # If image is in channels-first format (C, H, W), transpose back for TF ops
+    if image.shape[0] == 3:  # If channels-first
+        image = tf.transpose(image, (1, 2, 0))  # Convert to (H, W, C) for TF ops
 
-    # Random brightness adjustment
-    image = tf.image.random_brightness(image, max_delta=0.2)
+        # Apply augmentations that expect channels-last format
+        image = tf.image.random_flip_left_right(image)
+        image = tf.image.random_brightness(image, max_delta=0.2)
+        image = tf.image.random_contrast(image, lower=0.8, upper=1.2)
 
-    # Random contrast adjustment
-    image = tf.image.random_contrast(image, lower=0.8, upper=1.2)
+        # Additional augmentations for SVHN
+        image = tf.image.random_saturation(image, lower=0.8, upper=1.2)
 
-    # Ensure pixel values remain in [0, 1]
-    image = tf.clip_by_value(image, 0.0, 1.0)
+        # Ensure pixel values remain in [0, 1]
+        image = tf.clip_by_value(image, 0.0, 1.0)
+
+        # Convert back to channels-first
+        image = tf.transpose(image, (2, 0, 1))
+    else:
+        # Apply augmentations for channels-last format
+        image = tf.image.random_flip_left_right(image)
+        image = tf.image.random_brightness(image, max_delta=0.2)
+        image = tf.image.random_contrast(image, lower=0.8, upper=1.2)
+        image = tf.image.random_saturation(image, lower=0.8, upper=1.2)
+        image = tf.clip_by_value(image, 0.0, 1.0)
 
     return image, label
 
 
-BATCH_SIZE = 32
+BATCH_SIZE = 64
 AUTOTUNE = tf.data.AUTOTUNE
 
 train_ds = train_ds.map(preprocess_image, num_parallel_calls=AUTOTUNE)
-train_ds_augmented = train_ds.map(augment_image, num_parallel_calls=AUTOTUNE)
+train_ds = train_ds.map(augment_image, num_parallel_calls=AUTOTUNE)
 train_ds = train_ds.cache()
 train_ds = train_ds.shuffle(buffer_size=10000)
 train_ds = train_ds.batch(BATCH_SIZE)
@@ -135,9 +149,11 @@ def loss_fn(
     key: PRNGKeyArray | None,
     inference: bool = False,
 ) -> tuple[Array, Array]:
-    model = functools.partial(model, inference=inference, key=key)  # pyright: ignore
+    model = functools.partial(model, inference=inference, key=key)
     logits = eqx.filter_vmap(model)(x)
-    loss = optax.softmax_cross_entropy(logits, y)
+    loss = optax.softmax_cross_entropy_with_integer_labels(
+        logits, jnp.argmax(y, axis=1)
+    )
     return jnp.mean(loss), logits
 
 
@@ -146,14 +162,20 @@ def step(
     model: PyTree,
     x: Array,
     y: Array,
-    optimizer: optax.GradientTransformation,
+    optimizer: optax.GradientTransformationExtraArgs,
     opt_state: optax.OptState,
     key: PRNGKeyArray,
 ):
+    print("JIT")
     (loss_value, (logits)), grads = eqx.filter_value_and_grad(loss_fn, has_aux=True)(
         model, x, y, key
     )
-    updates, opt_state = optimizer.update(grads, opt_state, model)
+    # Calculate predictions and accuracy
+    predictions = jnp.argmax(logits, axis=1)
+    labels = jnp.argmax(y, axis=1)
+    accuracy = jnp.mean(predictions == labels)
+
+    updates, opt_state = optimizer.update(grads, opt_state, model, value=accuracy)
     model = eqx.apply_updates(model, updates)
     return model, opt_state, loss_value, logits
 
@@ -179,12 +201,57 @@ def eval(model: Model, test_dataset, key: PRNGKeyArray) -> TrainMetrics:
 
 train_metrics = TrainMetrics.empty()
 
-learning_rate = 0.1
-# weight_decay = 5e-4
-optimizer = optax.adam(learning_rate)
+
+def create_learning_rate_schedule(
+    base_learning_rate: float,
+    num_examples: int,
+    batch_size: int,
+    num_epochs: int,
+    warmup_epochs: int = 5,
+):
+    steps_per_epoch = num_examples // batch_size
+    total_steps = steps_per_epoch * num_epochs
+    warmup_steps = steps_per_epoch * warmup_epochs
+
+    warmup_fn = optax.linear_schedule(
+        init_value=0.0, end_value=base_learning_rate, transition_steps=warmup_steps
+    )
+
+    cosine_steps = total_steps - warmup_steps
+    cosine_fn = optax.cosine_decay_schedule(
+        init_value=base_learning_rate, decay_steps=cosine_steps
+    )
+
+    schedule_fn = optax.join_schedules(
+        schedules=[warmup_fn, cosine_fn], boundaries=[warmup_steps]
+    )
+
+    return schedule_fn
+
+
+# Setup optimizer with weight decay and learning rate schedule
+n_examples = ds_info.splits["train"].num_examples
+n_epochs = 100
+warmup_epochs = 5
+base_lr = 1e-3
+weight_decay = 1e-4
+
+lr_schedule = create_learning_rate_schedule(
+    base_learning_rate=base_lr,
+    num_examples=n_examples,
+    batch_size=BATCH_SIZE,
+    num_epochs=n_epochs,
+    warmup_epochs=warmup_epochs,
+)
+
+optimizer = optax.chain(
+    optax.clip_by_global_norm(1.0),  # Gradient clipping
+    optax.adamw(
+        learning_rate=lr_schedule, weight_decay=weight_decay, b1=0.9, b2=0.999, eps=1e-8
+    ),
+)
 
 opt_state = optimizer.init(eqx.filter(model, eqx.is_array))
-
 key = jax.random.key(99)
 n_epochs = 100
 

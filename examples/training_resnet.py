@@ -10,6 +10,7 @@ from tqdm import tqdm
 
 from jaxonmodels.models.resnet import ResNet, resnet18
 
+tf.config.set_visible_devices([], "GPU")
 (train, test), info = tfds.load(
     "cifar10", split=["train", "test"], with_info=True, as_supervised=True
 )  # pyright: ignore
@@ -42,7 +43,7 @@ def preprocess_train(
 
 train_dataset = train.map(preprocess_train, num_parallel_calls=tf.data.AUTOTUNE)
 SHUFFLE_VAL = len(train_dataset) // 1000
-BATCH_SIZE = 4
+BATCH_SIZE = 128
 train_dataset = train_dataset.shuffle(SHUFFLE_VAL)
 train_dataset = train_dataset.batch(BATCH_SIZE)
 train_dataset = train_dataset.prefetch(tf.data.AUTOTUNE)
