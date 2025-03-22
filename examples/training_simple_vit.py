@@ -12,8 +12,6 @@ from tqdm import tqdm
 
 from jaxonmodels.models.vit import VisionTransformer
 
-tf.config.set_visible_devices([], "GPU")
-
 
 class Model(eqx.Module):
     vit: VisionTransformer
@@ -25,10 +23,10 @@ class Model(eqx.Module):
         key, subkey, subkey2 = jax.random.split(key, 3)
         self.vit = VisionTransformer(
             input_resolution=32,
-            patch_size=2,  # Small patches capture fine details
+            patch_size=2,
             width=192,
-            layers=4,  # Deep model for hierarchical feature learning
-            heads=4,  # Multiple attention heads (64 dims per head)
+            layers=4,
+            heads=4,
             output_dim=64,
             key=subkey,
         )

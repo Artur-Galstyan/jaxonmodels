@@ -10,7 +10,6 @@ from tqdm import tqdm
 
 from jaxonmodels.models.resnet import ResNet, load_resnet
 
-tf.config.set_visible_devices([], "GPU")
 (train, test), info = tfds.load(
     "cifar10", split=["train", "test"], with_info=True, as_supervised=True
 )  # pyright: ignore

@@ -25,7 +25,7 @@ dependencies = [
 ]
 [project.optional-dependencies]
 dev = ["pre-commit", "pytest", "mkdocs"]
-examples = ["tensorflow", "tensorflow_datasets", "clu", "requests"]
+examples = ["tensorflow-cpu", "tensorflow_datasets", "clu", "requests"]
 tests = ["torch", "torchvision"]
 
 

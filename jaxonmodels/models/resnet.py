@@ -515,9 +515,6 @@ def _with_weights(
 
 
 def _resnet18(key, n_classes=1000):
-    """Create a ResNet-18 model without weights"""
-    from .resnet import BasicBlock, ResNet  # Import from your module
-
     key, subkey = jax.random.split(key)
     resnet, state = eqx.nn.make_with_state(ResNet)(
         BasicBlock,
@@ -537,9 +534,6 @@ def _resnet18(key, n_classes=1000):
 
 # Add all constructors for each ResNet variant
 def _resnet34(key, n_classes=1000):
-    """Create a ResNet-34 model without weights"""
-    from .resnet import BasicBlock, ResNet  # Import from your module
-
     key, subkey = jax.random.split(key)
     resnet, state = eqx.nn.make_with_state(ResNet)(
         BasicBlock,
@@ -558,8 +552,6 @@ def _resnet34(key, n_classes=1000):
 
 
 def _resnet50(key, n_classes=1000):
-    """Create a ResNet-50 model without weights"""
-
     key, subkey = jax.random.split(key)
     resnet, state = eqx.nn.make_with_state(ResNet)(
         Bottleneck,
@@ -578,8 +570,6 @@ def _resnet50(key, n_classes=1000):
 
 
 def _resnet101(key, n_classes=1000):
-    """Create a ResNet-101 model without weights"""
-
     key, subkey = jax.random.split(key)
     resnet, state = eqx.nn.make_with_state(ResNet)(
         Bottleneck,
@@ -598,8 +588,6 @@ def _resnet101(key, n_classes=1000):
 
 
 def _resnet152(key, n_classes=1000):
-    """Create a ResNet-152 model without weights"""
-
     key, subkey = jax.random.split(key)
     resnet, state = eqx.nn.make_with_state(ResNet)(
         Bottleneck,
@@ -618,8 +606,6 @@ def _resnet152(key, n_classes=1000):
 
 
 def _resnext50_32x4d(key, n_classes=1000):
-    """Create a ResNeXt-50 32x4d model without weights"""
-
     key, subkey = jax.random.split(key)
     resnet, state = eqx.nn.make_with_state(ResNet)(
         Bottleneck,
@@ -638,8 +624,6 @@ def _resnext50_32x4d(key, n_classes=1000):
 
 
 def _resnext101_32x8d(key, n_classes=1000):
-    """Create a ResNeXt-101 32x8d model without weights"""
-
     key, subkey = jax.random.split(key)
     resnet, state = eqx.nn.make_with_state(ResNet)(
         Bottleneck,
@@ -658,8 +642,6 @@ def _resnext101_32x8d(key, n_classes=1000):
 
 
 def _resnext101_64x4d(key, n_classes=1000):
-    """Create a ResNeXt-101 64x4d model without weights"""
-
     key, subkey = jax.random.split(key)
     resnet, state = eqx.nn.make_with_state(ResNet)(
         Bottleneck,
@@ -678,8 +660,6 @@ def _resnext101_64x4d(key, n_classes=1000):
 
 
 def _wide_resnet50_2(key, n_classes=1000):
-    """Create a Wide ResNet-50-2 model without weights"""
-
     key, subkey = jax.random.split(key)
     resnet, state = eqx.nn.make_with_state(ResNet)(
         Bottleneck,
@@ -698,8 +678,6 @@ def _wide_resnet50_2(key, n_classes=1000):
 
 
 def _wide_resnet101_2(key, n_classes=1000):
-    """Create a Wide ResNet-101-2 model without weights"""
-
     key, subkey = jax.random.split(key)
     resnet, state = eqx.nn.make_with_state(ResNet)(
         Bottleneck,
@@ -717,7 +695,6 @@ def _wide_resnet101_2(key, n_classes=1000):
     return resnet, state
 
 
-# Main function to load models with weights
 def load_resnet(
     model: Literal[
         "resnet18",
@@ -778,7 +755,6 @@ def load_resnet(
         case _:
             raise ValueError(f"Unknown model name: {model}")
 
-    # Load weights if requested
     if weights is not None:
         resnet, state = _with_weights((resnet, state), weights, cache)
 
