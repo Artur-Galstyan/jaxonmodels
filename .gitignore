@@ -168,3 +168,4 @@ cifar10_labels.npy
 main.py
 params.json
 *.pth
+checkpoints/

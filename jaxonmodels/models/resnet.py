@@ -418,10 +418,11 @@ class ResNet(eqx.Module):
     def __call__(
         self,
         x: Float[Array, "c h w"],
-        state: eqx.nn.State,
+        state: eqx.nn.State | None,
         *,
         inference: bool = False,
     ) -> tuple[Float[Array, " n_classes"], eqx.nn.State]:
+        assert state is not None
         x = self.conv1(x)
         x, state = self.bn(x, state, inference=inference)
         x = jax.nn.relu(x)
