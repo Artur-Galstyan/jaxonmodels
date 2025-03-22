@@ -8,7 +8,7 @@ import tensorflow_datasets as tfds
 from clu import metrics
 from tqdm import tqdm
 
-from jaxonmodels.models.resnet import ResNet, resnet18
+from jaxonmodels.models.resnet import ResNet, load_resnet
 
 tf.config.set_visible_devices([], "GPU")
 (train, test), info = tfds.load(
@@ -105,7 +105,7 @@ def eval(resnet: ResNet, test_dataset, state, key: jt.PRNGKeyArray) -> TrainMetr
 
 train_metrics = TrainMetrics.empty()
 
-resnet, state = resnet18(key=jax.random.key(0), n_classes=10)
+resnet, state = load_resnet(model="resnet18", key=jax.random.key(0), n_classes=10)
 
 learning_rate = 0.1
 weight_decay = 5e-4

@@ -8,7 +8,6 @@ import tensorflow as tf
 import tensorflow_datasets as tfds
 from clu import metrics
 from jaxtyping import Array, Float, Int, PRNGKeyArray, PyTree
-from optax import contrib
 from tqdm import tqdm
 
 from jaxonmodels.models.vit import VisionTransformer
@@ -33,7 +32,6 @@ class Model(eqx.Module):
             output_dim=64,
             key=subkey,
         )
-
         self.norm = eqx.nn.LayerNorm(shape=(64,), use_bias=True)
 
         self.dropout = eqx.nn.Dropout(p=0.2)
@@ -49,19 +47,17 @@ class Model(eqx.Module):
     def __call__(
         self,
         x: jnp.ndarray,
+        state: eqx.nn.State | None,
         *,
-        key: PRNGKeyArray | None = None,
         inference: bool = False,
-    ) -> jnp.ndarray:
-        x = self.vit(x)
+        key: PRNGKeyArray | None = None,
+    ) -> tuple[Array, eqx.nn.State | None]:
+        x, state = self.vit(x, state=state, inference=inference)
         x = self.norm(x)
         x = self.dropout(x, inference=inference, key=key)
         x = self.mlp(x)
-        return x
+        return x, state
 
-
-# Set random seed for reproducibility
-tf.random.set_seed(42)
 
 # Load SVHN dataset
 (train_ds, test_ds), ds_info = tfds.load(
@@ -70,12 +66,6 @@ tf.random.set_seed(42)
     as_supervised=True,
     with_info=True,
 )  # pyright: ignore
-
-
-# Print dataset info
-print("Dataset information:")
-print(f"Number of training examples: {ds_info.splits['train'].num_examples}")
-print(f"Number of test examples: {ds_info.splits['test'].num_examples}")
 
 
 # Define preprocessing function
@@ -139,22 +129,25 @@ test_ds = test_ds.prefetch(AUTOTUNE)
 train_dataset = tfds.as_numpy(train_ds)
 test_dataset = tfds.as_numpy(test_ds)
 
-model = Model(key=jax.random.key(42))
+model, state = eqx.nn.make_with_state(Model)(key=jax.random.key(42))
 
 
 def loss_fn(
     model: Model,
     x: Float[Array, "b c h w"],
     y: Int[Array, "b 10"],
+    state: eqx.nn.State,
     key: PRNGKeyArray | None,
     inference: bool = False,
-) -> tuple[Array, Array]:
-    model = functools.partial(model, inference=inference, key=key)
-    logits = eqx.filter_vmap(model)(x)
+) -> tuple[Array, tuple[Array, eqx.nn.State]]:
+    model_pt = functools.partial(model, inference=inference, key=key)
+    logits, state = eqx.filter_vmap(
+        model_pt, in_axes=(0, None), out_axes=(0, None), axis_name="batch"
+    )(x, state)
     loss = optax.softmax_cross_entropy_with_integer_labels(
         logits, jnp.argmax(y, axis=1)
     )
-    return jnp.mean(loss), logits
+    return jnp.mean(loss), (logits, state)
 
 
 @eqx.filter_jit
@@ -164,20 +157,20 @@ def step(
     y: Array,
     optimizer: optax.GradientTransformationExtraArgs,
     opt_state: optax.OptState,
+    state: eqx.nn.State,
     key: PRNGKeyArray,
 ):
     print("JIT")
-    (loss_value, (logits)), grads = eqx.filter_value_and_grad(loss_fn, has_aux=True)(
-        model, x, y, key
-    )
-    # Calculate predictions and accuracy
+    (loss_value, (logits, state)), grads = eqx.filter_value_and_grad(
+        loss_fn, has_aux=True
+    )(model, x, y, state, key)
     predictions = jnp.argmax(logits, axis=1)
     labels = jnp.argmax(y, axis=1)
     accuracy = jnp.mean(predictions == labels)
 
     updates, opt_state = optimizer.update(grads, opt_state, model, value=accuracy)
     model = eqx.apply_updates(model, updates)
-    return model, opt_state, loss_value, logits
+    return model, opt_state, loss_value, logits, state
 
 
 class TrainMetrics(eqx.Module, metrics.Collection):
@@ -185,18 +178,22 @@ class TrainMetrics(eqx.Module, metrics.Collection):
     accuracy: metrics.Accuracy
 
 
-def eval(model: Model, test_dataset, key: PRNGKeyArray) -> TrainMetrics:
+def eval(
+    model: Model, test_dataset, state: eqx.nn.State, key: PRNGKeyArray
+) -> tuple[TrainMetrics, eqx.nn.State]:
     eval_metrics = TrainMetrics.empty()
     for x, y in test_dataset:
         y = jnp.array(y, dtype=jnp.int32)
-        loss, (logits) = loss_fn(model, x, y, inference=True, key=None)
+        loss, (logits, state) = loss_fn(
+            model, x, y, state=state, inference=True, key=None
+        )
         eval_metrics = eval_metrics.merge(
             TrainMetrics.single_from_model_output(
                 logits=logits, labels=jnp.argmax(y, axis=1), loss=loss
             )
         )
 
-    return eval_metrics
+    return eval_metrics, state
 
 
 train_metrics = TrainMetrics.empty()
@@ -244,12 +241,21 @@ lr_schedule = create_learning_rate_schedule(
     warmup_epochs=warmup_epochs,
 )
 
+
+# optimizer = optax.sgd(base_lr)
+# opt_state = optimizer.init(eqx.filter(model, eqx.is_inexact_array_like))
+
 optimizer = optax.chain(
-    optax.clip_by_global_norm(1.0),  # Gradient clipping
+    optax.clip(1.0),
     optax.adamw(
         learning_rate=lr_schedule, weight_decay=weight_decay, b1=0.9, b2=0.999, eps=1e-8
     ),
 )
+
+# optimizer = optax.adamw(
+#     learning_rate=base_lr  # lr_schedule, weight_decay=weight_decay, b1=0.9, b2=0.999, eps=1e-8
+# )
+
 
 opt_state = optimizer.init(eqx.filter(model, eqx.is_array))
 key = jax.random.key(99)
@@ -264,7 +270,9 @@ for epoch in range(n_epochs):
         x = jnp.array(x)
         y = jnp.array(y, dtype=jnp.int32)
         key, subkey = jax.random.split(key)
-        model, opt_state, loss, logits = step(model, x, y, optimizer, opt_state, key)
+        model, opt_state, loss, logits, state = step(
+            model, x, y, optimizer, opt_state, state, key
+        )
         train_metrics = train_metrics.merge(
             TrainMetrics.single_from_model_output(
                 logits=logits, labels=jnp.argmax(y, axis=1), loss=loss
@@ -276,7 +284,7 @@ for epoch in range(n_epochs):
             {"loss": f"{vals['loss']:.4f}", "acc": f"{vals['accuracy']:.4f}"}
         )
     key, subkey = jax.random.split(key)
-    eval_metrics = eval(model, test_dataset, subkey)
+    eval_metrics, state = eval(model, test_dataset, state, subkey)
     evals = eval_metrics.compute()
     print(
         f"Epoch {epoch}: "

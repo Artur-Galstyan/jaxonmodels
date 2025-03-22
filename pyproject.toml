@@ -9,28 +9,34 @@ authors = [{ name = "Artur A. Galstyan", email = "mail@arturgalstyan.dev" }]
 dependencies = [
     "jax",
     "equinox",
+    "pydantic",
     "jaxlib",
     "tqdm",
     "beartype",
     "typing_extensions",
     "loguru",
-    "matplotlib",
     "optax",
     "jaxonloader",
-    "fire",
     "jaxtyping",
-    "sentencepiece",
-    "boto3",
-    "boto3-stubs",
     "pytest",
-    "ftfy>=6.3.1",
-    "regex>=2024.11.6",
+    "ftfy",
+    "regex",
+    "grain",
 ]
 [project.optional-dependencies]
 dev = ["pre-commit", "pytest", "mkdocs"]
 examples = ["tensorflow", "tensorflow_datasets", "clu", "requests"]
 tests = ["torch", "torchvision"]
 
+
+
+[tool.uv.sources]
+torch = { index = "pytorch" }
+
+[[tool.uv.index]]
+name = "pytorch"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
 
 [tool.ruff.lint]
 fixable = ["I001", "F401"]

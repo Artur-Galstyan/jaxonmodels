@@ -106,6 +106,10 @@ class VisionTransformer(eqx.Module):
     def __call__(
         self,
         x: Float[Array, "c h w"],
+        state: eqx.nn.State | None = None,
+        *,
+        inference: bool = False,
+        key: PRNGKeyArray | None = None,
     ):
         x = self.conv1(x)
         x = x.reshape(x.shape[0], -1)
@@ -125,4 +129,4 @@ class VisionTransformer(eqx.Module):
         if self.proj is not None:
             x = x @ self.proj
 
-        return x
+        return x, state
