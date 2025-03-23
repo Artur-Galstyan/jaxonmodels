@@ -1,11 +1,14 @@
+import collections
 import copy
+import functools
 import math
 from dataclasses import dataclass
+from itertools import repeat
 
 import equinox as eqx
 import jax
 import jax.numpy as jnp
-from beartype.typing import Callable, Sequence
+from beartype.typing import Any, Callable, Sequence
 from jaxtyping import Array, Float, PRNGKeyArray
 
 from jaxonmodels.functions.functions import stochastic_depth
@@ -26,6 +29,12 @@ def _make_divisible(v: float, divisor: int, min_value: int | None = None) -> int
     if new_v < 0.9 * v:
         new_v += divisor
     return new_v
+
+
+def _make_ntuple(x: Any, n: int) -> tuple[Any, ...]:
+    if isinstance(x, collections.abc.Iterable):  # pyright: ignore
+        return tuple(x)
+    return tuple(repeat(x, n))
 
 
 @dataclass
@@ -101,23 +110,22 @@ class FusedMBConvConfig(_MBConvConfig):
 
 class Conv2dNormActivation(eqx.Module):
     conv2d: eqx.nn.Conv2d
-    norm_layer: eqx.Module | None
+    norm: eqx.Module | None
     activation: eqx.nn.Lambda | None
 
     def __init__(
         self,
         in_channels: int,
         out_channels: int,
-        kernel_size: int | Sequence[int],
-        stride: int | Sequence[int] = (1, 1),
-        padding: str | int | Sequence[int] | Sequence[tuple[int, int]] = (0, 0),
-        dilation: int | Sequence[int] = (1, 1),
+        kernel_size: int | Sequence[int] = 3,
+        stride: int | Sequence[int] = 1,
+        padding: str | int | Sequence[int] | Sequence[tuple[int, int]] | None = None,
         groups: int = 1,
-        use_bias: bool | None = None,
-        padding_mode: str = "ZEROS",
-        dtype=None,
         norm_layer: Callable[..., eqx.Module] | None = BatchNorm,
         activation_layer: Callable[..., Array] | None = jax.nn.relu,
+        dilation: int | Sequence[int] = 1,
+        use_bias: bool | None = None,
+        dtype=None,
         axis_name: str = "batch",
         *,
         key: PRNGKeyArray,
@@ -129,7 +137,7 @@ class Conv2dNormActivation(eqx.Module):
                 _conv_dim = (
                     len(kernel_size)
                     if isinstance(kernel_size, Sequence)
-                    else len(dilation)
+                    else len(dilation)  # pyright: ignore
                 )
                 kernel_size = _make_ntuple(kernel_size, _conv_dim)
                 dilation = _make_ntuple(dilation, _conv_dim)
@@ -139,20 +147,18 @@ class Conv2dNormActivation(eqx.Module):
         if use_bias is None:
             use_bias = norm_layer is None
 
-        self.layers = []
         key, subkey = jax.random.split(key)
 
         self.conv2d = eqx.nn.Conv2d(
-            in_channels,
-            out_channels,
-            kernel_size,
-            stride,
-            padding,
-            dilation,
-            groups,
-            use_bias,
-            padding_mode,
-            dtype,
+            in_channels=in_channels,
+            out_channels=out_channels,
+            kernel_size=kernel_size,
+            stride=stride,
+            padding=padding,
+            dilation=dilation,
+            groups=groups,
+            use_bias=use_bias,
+            dtype=dtype,
             key=subkey,
         )
 
@@ -161,6 +167,8 @@ class Conv2dNormActivation(eqx.Module):
 
         if activation_layer is not None:
             self.activation = eqx.nn.Lambda(activation_layer)
+        else:
+            self.activation = None
 
     def __call__(
         self,
@@ -241,7 +249,6 @@ class MBConv(eqx.Module):
         self,
         cnf: MBConvConfig,
         stochastic_depth_prob: float,
-        *,
         key: PRNGKeyArray,
     ):
         if not (1 <= cnf.stride <= 2):
@@ -309,10 +316,12 @@ class MBConv(eqx.Module):
         result, state = self.depthwise_conv2d(result, state, inference)
         result = self.se_layer(result)
 
+        result, state = self.project_conv2d(result, state, inference)
+
         if self.use_res_connect:
             result = self.stochastic_depth(result, inference=inference, key=key)
             result += x
-        return result
+        return result, state
 
 
 class FusedMBConv(eqx.Module):
@@ -423,6 +432,7 @@ class Classifier(eqx.Module):
 class EfficientNet(eqx.Module):
     features: list[Conv2dNormActivation | MBConv | FusedMBConv | InvertedResidualBlock]
     avgpool: eqx.nn.AdaptiveAvgPool2d
+    classifier: Classifier
 
     def __init__(
         self,
@@ -476,7 +486,7 @@ class EfficientNet(eqx.Module):
                     stochastic_depth_prob * float(stage_block_id) / total_stage_blocks
                 )
                 key, subkey = jax.random.split(key)
-                stage.append(block_cnf.block(block_cnf, sd_prob, BatchNorm, key=subkey))
+                stage.append(block_cnf.block(block_cnf, sd_prob, subkey))
                 stage_block_id += 1
 
             self.features.append(InvertedResidualBlock(stage))
@@ -519,3 +529,76 @@ class EfficientNet(eqx.Module):
         x = self.classifier(x, inference, key)
 
         return x, state
+
+
+def _efficientnet(
+    inverted_residual_setting: Sequence[MBConvConfig | FusedMBConvConfig],
+    dropout: float,
+    last_channel: int | None,
+    with_weights: bool,
+    key: PRNGKeyArray,
+) -> tuple[EfficientNet, eqx.nn.State]:
+    model, state = eqx.nn.make_with_state(EfficientNet)(
+        inverted_residual_setting, dropout, last_channel=last_channel, key=key
+    )
+
+    return model, state
+
+
+def _efficientnet_conf(
+    arch: str,
+    **kwargs: Any,
+) -> tuple[Sequence[MBConvConfig | FusedMBConvConfig], int | None]:
+    inverted_residual_setting: Sequence[MBConvConfig | FusedMBConvConfig]
+    if arch.startswith("efficientnet_b"):
+        bneck_conf = functools.partial(
+            MBConvConfig,
+            width_mult=kwargs.pop("width_mult"),
+            depth_mult=kwargs.pop("depth_mult"),
+        )
+        inverted_residual_setting = [
+            bneck_conf(1, 3, 1, 32, 16, 1),
+            bneck_conf(6, 3, 2, 16, 24, 2),
+            bneck_conf(6, 5, 2, 24, 40, 2),
+            bneck_conf(6, 3, 2, 40, 80, 3),
+            bneck_conf(6, 5, 1, 80, 112, 3),
+            bneck_conf(6, 5, 2, 112, 192, 4),
+            bneck_conf(6, 3, 1, 192, 320, 1),
+        ]
+        last_channel = None
+    elif arch.startswith("efficientnet_v2_s"):
+        inverted_residual_setting = [
+            FusedMBConvConfig(1, 3, 1, 24, 24, 2),
+            FusedMBConvConfig(4, 3, 2, 24, 48, 4),
+            FusedMBConvConfig(4, 3, 2, 48, 64, 4),
+            MBConvConfig(4, 3, 2, 64, 128, 6),
+            MBConvConfig(6, 3, 1, 128, 160, 9),
+            MBConvConfig(6, 3, 2, 160, 256, 15),
+        ]
+        last_channel = 1280
+    elif arch.startswith("efficientnet_v2_m"):
+        inverted_residual_setting = [
+            FusedMBConvConfig(1, 3, 1, 24, 24, 3),
+            FusedMBConvConfig(4, 3, 2, 24, 48, 5),
+            FusedMBConvConfig(4, 3, 2, 48, 80, 5),
+            MBConvConfig(4, 3, 2, 80, 160, 7),
+            MBConvConfig(6, 3, 1, 160, 176, 14),
+            MBConvConfig(6, 3, 2, 176, 304, 18),
+            MBConvConfig(6, 3, 1, 304, 512, 5),
+        ]
+        last_channel = 1280
+    elif arch.startswith("efficientnet_v2_l"):
+        inverted_residual_setting = [
+            FusedMBConvConfig(1, 3, 1, 32, 32, 4),
+            FusedMBConvConfig(4, 3, 2, 32, 64, 7),
+            FusedMBConvConfig(4, 3, 2, 64, 96, 7),
+            MBConvConfig(4, 3, 2, 96, 192, 10),
+            MBConvConfig(6, 3, 1, 192, 224, 19),
+            MBConvConfig(6, 3, 2, 224, 384, 25),
+            MBConvConfig(6, 3, 1, 384, 640, 7),
+        ]
+        last_channel = 1280
+    else:
+        raise ValueError(f"Unsupported model type {arch}")
+
+    return inverted_residual_setting, last_channel
