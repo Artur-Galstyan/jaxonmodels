@@ -55,6 +55,11 @@ def main():
             f"{i + 1}. {imagenet_labels[idx]} ({probabilities[idx].item() * 100:.2f}%)"
         )
 
+    # Print the dtypes of the model weights
+    print("\nModel weights dtypes:")
+    for name, param in model.named_parameters():
+        print(f"{name}: {param.dtype}")
+
 
 def load_imagenet_labels():
     """
