@@ -2,17 +2,42 @@ import collections
 import copy
 import functools
 import math
+import os
 from dataclasses import dataclass
 from itertools import repeat
+from pathlib import Path
+from urllib.request import urlretrieve
 
 import equinox as eqx
 import jax
 import jax.numpy as jnp
-from beartype.typing import Any, Callable, Sequence
+from beartype.typing import Any, Callable, Literal, Sequence
 from jaxtyping import Array, Float, PRNGKeyArray
 
 from jaxonmodels.functions.functions import stochastic_depth
 from jaxonmodels.layers.batch_norm import BatchNorm
+from jaxonmodels.statedict2pytree.s2p import (
+    convert,
+    move_running_fields_to_the_end,
+    pytree_to_fields,
+    serialize_pytree,
+    state_dict_to_fields,
+)
+
+_MODELS = {
+    "efficientnet_b0_IMAGENET1K_V1": "https://download.pytorch.org/models/efficientnet_b0_rwightman-7f5810bc.pth",
+    "efficientnet_b1_IMAGENET1K_V1": "https://download.pytorch.org/models/efficientnet_b1_rwightman-bac287d4.pth",
+    "efficientnet_b1_IMAGENET1K_V2": "https://download.pytorch.org/models/efficientnet_b1-c27df63c.pth",
+    "efficientnet_b2_IMAGENET1K_V1": "https://download.pytorch.org/models/efficientnet_b2_rwightman-c35c1473.pth",
+    "efficientnet_b3_IMAGENET1K_V1": "https://download.pytorch.org/models/efficientnet_b3_rwightman-b3899882.pth",
+    "efficientnet_b4_IMAGENET1K_V1": "https://download.pytorch.org/models/efficientnet_b4_rwightman-23ab8bcd.pth",
+    "efficientnet_b5_IMAGENET1K_V1": "https://download.pytorch.org/models/efficientnet_b5_lukemelas-1a07897c.pth",
+    "efficientnet_b6_IMAGENET1K_V1": "https://download.pytorch.org/models/efficientnet_b6_lukemelas-24a108a5.pth",
+    "efficientnet_b7_IMAGENET1K_V1": "https://download.pytorch.org/models/efficientnet_b7_lukemelas-c5b4e57e.pth",
+    "efficientnet_v2_s_IMAGENET1K_V1": "https://download.pytorch.org/models/efficientnet_v2_s-dd5fe13b.pth",
+    "efficientnet_v2_m_IMAGENET1K_V1": "https://download.pytorch.org/models/efficientnet_v2_m-dc08266a.pth",
+    "efficientnet_v2_l_IMAGENET1K_V1": "https://download.pytorch.org/models/efficientnet_v2_l-59c71312.pth",
+}
 
 
 def _make_divisible(v: float, divisor: int, min_value: int | None = None) -> int:
@@ -439,7 +464,7 @@ class EfficientNet(eqx.Module):
         inverted_residual_setting: Sequence[MBConvConfig | FusedMBConvConfig],
         dropout: float,
         stochastic_depth_prob: float = 0.2,
-        num_classes: int = 1000,
+        n_classes: int = 1000,
         last_channel: int | None = None,
         *,
         key: PRNGKeyArray,
@@ -511,7 +536,7 @@ class EfficientNet(eqx.Module):
         self.avgpool = eqx.nn.AdaptiveAvgPool2d(1)
         key, subkey = jax.random.split(key)
         self.classifier = Classifier(
-            dropout, lastconv_output_channels, num_classes, subkey
+            dropout, lastconv_output_channels, n_classes, subkey
         )
         # todo: kaiming init
 
@@ -535,11 +560,15 @@ def _efficientnet(
     inverted_residual_setting: Sequence[MBConvConfig | FusedMBConvConfig],
     dropout: float,
     last_channel: int | None,
-    with_weights: bool,
+    n_classes: int,
     key: PRNGKeyArray,
 ) -> tuple[EfficientNet, eqx.nn.State]:
     model, state = eqx.nn.make_with_state(EfficientNet)(
-        inverted_residual_setting, dropout, last_channel=last_channel, key=key
+        inverted_residual_setting,
+        dropout,
+        last_channel=last_channel,
+        n_classes=n_classes,
+        key=key,
     )
 
     return model, state
@@ -602,3 +631,289 @@ def _efficientnet_conf(
         raise ValueError(f"Unsupported model type {arch}")
 
     return inverted_residual_setting, last_channel
+
+
+def _with_weights(
+    pytree,
+    weights: str,
+    cache: bool,
+):
+    """Load pre-trained weights for the model"""
+    efficientnet, state = pytree
+
+    weights_url = _MODELS.get(weights)
+    if weights_url is None:
+        raise ValueError(f"No weights found for {weights}")
+
+    # Create directories for caching
+    jaxonmodels_dir = os.path.expanduser("~/.jaxonmodels/models")
+    os.makedirs(jaxonmodels_dir, exist_ok=True)
+
+    # Check if cached model exists
+    if cache:
+        if os.path.exists(str(Path(jaxonmodels_dir) / f"{weights}.eqx")):
+            return eqx.tree_deserialise_leaves(
+                str(Path(jaxonmodels_dir) / f"{weights}.eqx"),
+                (efficientnet, state),
+            )
+
+    # Download weights if not already downloaded
+    weights_dir = os.path.expanduser("~/.jaxonmodels/pytorch_weights")
+    os.makedirs(weights_dir, exist_ok=True)
+    filename = weights_url.split("/")[-1]
+    weights_file = os.path.join(weights_dir, filename)
+    if not os.path.exists(weights_file):
+        urlretrieve(weights_url, weights_file)
+
+    # Load PyTorch weights
+    import torch
+
+    weights_dict = torch.load(
+        weights_file, map_location=torch.device("cpu"), weights_only=True
+    )
+
+    # Convert PyTorch weights to JAX format
+    torchfields = state_dict_to_fields(weights_dict)
+    torchfields = move_running_fields_to_the_end(torchfields)
+    jaxfields, state_indices = pytree_to_fields((efficientnet, state))
+
+    efficientnet, state = convert(
+        weights_dict, (efficientnet, state), jaxfields, state_indices, torchfields
+    )
+
+    # Cache the model if requested
+    if cache:
+        serialize_pytree(
+            (efficientnet, state), str(Path(jaxonmodels_dir) / f"{weights}.eqx")
+        )
+
+    return efficientnet, state
+
+
+def _efficientnet_b0(key, n_classes=1000):
+    """Create EfficientNet B0 model with random initialization"""
+    inverted_residual_setting, last_channel = _efficientnet_conf(
+        "efficientnet_b0", width_mult=1.0, depth_mult=1.0
+    )
+    return _efficientnet(
+        inverted_residual_setting, 0.2, last_channel, n_classes=n_classes, key=key
+    )
+
+
+def _efficientnet_b1(key, n_classes=1000):
+    """Create EfficientNet B1 model with random initialization"""
+    inverted_residual_setting, last_channel = _efficientnet_conf(
+        "efficientnet_b1", width_mult=1.0, depth_mult=1.1
+    )
+    return _efficientnet(
+        inverted_residual_setting, 0.2, last_channel, n_classes=n_classes, key=key
+    )
+
+
+def _efficientnet_b2(key, n_classes=1000):
+    """Create EfficientNet B2 model with random initialization"""
+    inverted_residual_setting, last_channel = _efficientnet_conf(
+        "efficientnet_b2", width_mult=1.1, depth_mult=1.2
+    )
+    return _efficientnet(
+        inverted_residual_setting, 0.3, last_channel, n_classes=n_classes, key=key
+    )
+
+
+def _efficientnet_b3(key, n_classes=1000):
+    """Create EfficientNet B3 model with random initialization"""
+    inverted_residual_setting, last_channel = _efficientnet_conf(
+        "efficientnet_b3", width_mult=1.2, depth_mult=1.4
+    )
+    return _efficientnet(
+        inverted_residual_setting, 0.3, last_channel, n_classes=n_classes, key=key
+    )
+
+
+def _efficientnet_b4(key, n_classes=1000):
+    """Create EfficientNet B4 model with random initialization"""
+    inverted_residual_setting, last_channel = _efficientnet_conf(
+        "efficientnet_b4", width_mult=1.4, depth_mult=1.8
+    )
+    return _efficientnet(
+        inverted_residual_setting, 0.4, last_channel, n_classes=n_classes, key=key
+    )
+
+
+def _efficientnet_b5(key, n_classes=1000):
+    """Create EfficientNet B5 model with random initialization"""
+    inverted_residual_setting, last_channel = _efficientnet_conf(
+        "efficientnet_b5", width_mult=1.6, depth_mult=2.2
+    )
+    return _efficientnet(
+        inverted_residual_setting, 0.4, last_channel, n_classes=n_classes, key=key
+    )
+
+
+def _efficientnet_b6(key, n_classes=1000):
+    """Create EfficientNet B6 model with random initialization"""
+    inverted_residual_setting, last_channel = _efficientnet_conf(
+        "efficientnet_b6", width_mult=1.8, depth_mult=2.6
+    )
+    return _efficientnet(
+        inverted_residual_setting, 0.5, last_channel, n_classes=n_classes, key=key
+    )
+
+
+def _efficientnet_b7(key, n_classes=1000):
+    """Create EfficientNet B7 model with random initialization"""
+    inverted_residual_setting, last_channel = _efficientnet_conf(
+        "efficientnet_b7", width_mult=2.0, depth_mult=3.1
+    )
+    return _efficientnet(
+        inverted_residual_setting, 0.5, last_channel, n_classes=n_classes, key=key
+    )
+
+
+def _efficientnet_v2_s(key, n_classes=1000):
+    """Create EfficientNet V2 Small model with random initialization"""
+    inverted_residual_setting, last_channel = _efficientnet_conf("efficientnet_v2_s")
+    return _efficientnet(
+        inverted_residual_setting, 0.2, last_channel, n_classes=n_classes, key=key
+    )
+
+
+def _efficientnet_v2_m(key, n_classes=1000):
+    """Create EfficientNet V2 Medium model with random initialization"""
+    inverted_residual_setting, last_channel = _efficientnet_conf("efficientnet_v2_m")
+    return _efficientnet(
+        inverted_residual_setting, 0.3, last_channel, n_classes=n_classes, key=key
+    )
+
+
+def _efficientnet_v2_l(key, n_classes=1000):
+    """Create EfficientNet V2 Large model with random initialization"""
+    inverted_residual_setting, last_channel = _efficientnet_conf("efficientnet_v2_l")
+    return _efficientnet(
+        inverted_residual_setting, 0.4, last_channel, n_classes=n_classes, key=key
+    )
+
+
+def _assert_model_and_weights_fit(
+    model: Literal[
+        "efficientnet_b0",
+        "efficientnet_b1",
+        "efficientnet_b2",
+        "efficientnet_b3",
+        "efficientnet_b4",
+        "efficientnet_b5",
+        "efficientnet_b6",
+        "efficientnet_b7",
+        "efficientnet_v2_s",
+        "efficientnet_v2_m",
+        "efficientnet_v2_l",
+    ],
+    weights: Literal[
+        "efficientnet_b0_IMAGENET1K_V1",
+        "efficientnet_b1_IMAGENET1K_V1",
+        "efficientnet_b1_IMAGENET1K_V2",
+        "efficientnet_b2_IMAGENET1K_V1",
+        "efficientnet_b3_IMAGENET1K_V1",
+        "efficientnet_b4_IMAGENET1K_V1",
+        "efficientnet_b5_IMAGENET1K_V1",
+        "efficientnet_b6_IMAGENET1K_V1",
+        "efficientnet_b7_IMAGENET1K_V1",
+        "efficientnet_v2_s_IMAGENET1K_V1",
+        "efficientnet_v2_m_IMAGENET1K_V1",
+        "efficientnet_v2_l_IMAGENET1K_V1",
+    ],
+):
+    if "_" in weights:
+        weights_model = weights.split("_IMAGENET")[0].lower()
+
+        # Check if the specified weights are compatible with the model
+        if weights_model != model:
+            raise ValueError(
+                f"Model {model} is incompatible with weights {weights}. "
+                f"Expected weights starting with '{model}'."
+            )
+
+
+def load_efficientnet(
+    model: Literal[
+        "efficientnet_b0",
+        "efficientnet_b1",
+        "efficientnet_b2",
+        "efficientnet_b3",
+        "efficientnet_b4",
+        "efficientnet_b5",
+        "efficientnet_b6",
+        "efficientnet_b7",
+        "efficientnet_v2_s",
+        "efficientnet_v2_m",
+        "efficientnet_v2_l",
+    ],
+    weights: Literal[
+        "efficientnet_b0_IMAGENET1K_V1",
+        "efficientnet_b1_IMAGENET1K_V1",
+        "efficientnet_b1_IMAGENET1K_V2",
+        "efficientnet_b2_IMAGENET1K_V1",
+        "efficientnet_b3_IMAGENET1K_V1",
+        "efficientnet_b4_IMAGENET1K_V1",
+        "efficientnet_b5_IMAGENET1K_V1",
+        "efficientnet_b6_IMAGENET1K_V1",
+        "efficientnet_b7_IMAGENET1K_V1",
+        "efficientnet_v2_s_IMAGENET1K_V1",
+        "efficientnet_v2_m_IMAGENET1K_V1",
+        "efficientnet_v2_l_IMAGENET1K_V1",
+    ]
+    | None = None,
+    n_classes: int = 1000,
+    cache: bool = True,
+    *,
+    key: PRNGKeyArray | None = None,
+) -> tuple[EfficientNet, eqx.nn.State]:
+    """
+    Load an EfficientNet model with optional pre-trained weights.
+
+    Args:
+        model: The name of the EfficientNet model to load
+        weights: The name of the weights to load (from _MODELS), or None for random init
+        n_classes: Number of output classes
+        cache: Whether to cache the model
+        key: Random key for initialization
+
+    Returns:
+        A tuple of (model, state)
+    """
+    if key is None:
+        key = jax.random.key(42)
+
+    match model:
+        case "efficientnet_b0":
+            efficientnet, state = _efficientnet_b0(key, n_classes)
+        case "efficientnet_b1":
+            efficientnet, state = _efficientnet_b1(key, n_classes)
+        case "efficientnet_b2":
+            efficientnet, state = _efficientnet_b2(key, n_classes)
+        case "efficientnet_b3":
+            efficientnet, state = _efficientnet_b3(key, n_classes)
+        case "efficientnet_b4":
+            efficientnet, state = _efficientnet_b4(key, n_classes)
+        case "efficientnet_b5":
+            efficientnet, state = _efficientnet_b5(key, n_classes)
+        case "efficientnet_b6":
+            efficientnet, state = _efficientnet_b6(key, n_classes)
+        case "efficientnet_b7":
+            efficientnet, state = _efficientnet_b7(key, n_classes)
+        case "efficientnet_v2_s":
+            efficientnet, state = _efficientnet_v2_s(key, n_classes)
+        case "efficientnet_v2_m":
+            efficientnet, state = _efficientnet_v2_m(key, n_classes)
+        case "efficientnet_v2_l":
+            efficientnet, state = _efficientnet_v2_l(key, n_classes)
+        case _:
+            raise ValueError(f"Unknown model name: {model}")
+
+    if weights:
+        _assert_model_and_weights_fit(model, weights)
+        efficientnet, state = _with_weights((efficientnet, state), weights, cache)
+
+    assert efficientnet is not None
+    assert state is not None
+    return efficientnet, state

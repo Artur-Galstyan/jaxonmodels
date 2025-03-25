@@ -7,17 +7,13 @@ import torchvision.transforms as transforms
 from PIL import Image
 from torchvision.models import EfficientNet_B0_Weights
 
-from jaxonmodels.models.efficientnet import _efficientnet, _efficientnet_conf
+from jaxonmodels.models.efficientnet import load_efficientnet
 
 
 def main():
-    inverted_residual_setting, last_channel = _efficientnet_conf(
-        "efficientnet_b0", width_mult=1.0, depth_mult=1.0
-    )
-
-    key = jax.random.key(42)
-    model, state = _efficientnet(
-        inverted_residual_setting, 0.2, last_channel, False, key
+    model, state = load_efficientnet(
+        "efficientnet_b0",
+        weights="efficientnet_b0_IMAGENET1K_V1",
     )
 
     img_path = "cat.jpg"
@@ -32,7 +28,7 @@ def main():
             transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
         ]
     )
-
+    key = jax.random.key(43)
     input_tensor = preprocess(img)
     input_batch = input_tensor.unsqueeze(0)  # Add batch dimension
 
@@ -46,19 +42,19 @@ def main():
 
     print(output.shape)
 
-    # # Load ImageNet class labels
-    # imagenet_labels = load_imagenet_labels()
+    # Load ImageNet class labels
+    imagenet_labels = load_imagenet_labels()
 
-    # # Get the top 5 predictions
-    # _, indices = torch.topk(output, 5)
-    # probabilities = torch.nn.functional.softmax(output, dim=1)[0]
+    # Get the top 5 predictions
 
-    # print("\nTop 5 predictions:")
-    # for i, idx in enumerate(indices[0]):
-    #     idx = idx.item()
-    #     print(
-    #         f"{i + 1}. {imagenet_labels[idx]} ({probabilities[idx].item() * 100:.2f}%)" # noqa
-    #     )
+    _, indices = jax.lax.top_k(output, 5)
+    probabilities = jax.nn.softmax(output, axis=1)[0]
+
+    print("\nTop 5 predictions:")
+    for i, idx in enumerate(indices[0]):
+        print(
+            f"{i + 1}. {imagenet_labels[idx]} ({probabilities[idx] * 100:.2f}%)"  # noqa
+        )
 
 
 def load_imagenet_labels():

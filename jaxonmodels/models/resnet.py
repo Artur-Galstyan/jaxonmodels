@@ -696,6 +696,52 @@ def _wide_resnet101_2(key, n_classes=1000):
     return resnet, state
 
 
+def _assert_model_and_weights_fit(
+    model: Literal[
+        "resnet18",
+        "resnet34",
+        "resnet50",
+        "resnet101",
+        "resnet152",
+        "resnext50_32x4d",
+        "resnext101_32x8d",
+        "resnext101_64x4d",
+        "wide_resnet50_2",
+        "wide_resnet101_2",
+    ],
+    weights: Literal[
+        "resnet18_IMAGENET1K_V1",
+        "resnet34_IMAGENET1K_V1",
+        "resnet50_IMAGENET1K_V1",
+        "resnet50_IMAGENET1K_V2",
+        "resnet101_IMAGENET1K_V1",
+        "resnet101_IMAGENET1K_V2",
+        "resnet152_IMAGENET1K_V1",
+        "resnet152_IMAGENET1K_V2",
+        "resnext50_32X4D_IMAGENET1K_V1",
+        "resnext50_32X4D_IMAGENET1K_V2",
+        "resnext101_32X8D_IMAGENET1K_V1",
+        "resnext101_32X8D_IMAGENET1K_V2",
+        "resnext101_64X4D_IMAGENET1K_V1",
+        "wide_resnet50_2_IMAGENET1K_V1",
+        "wide_resnet50_2_IMAGENET1K_V2",
+        "wide_resnet101_2_IMAGENET1K_V1",
+        "wide_resnet101_2_IMAGENET1K_V2",
+    ],
+):
+    # Check if the weights are specific (include model name)
+    if "_" in weights:
+        # Extract model name from weights string
+        weights_model = weights.split("_")[0].lower()
+
+        # Check if the specified weights are compatible with the model
+        if not model.startswith(weights_model):
+            raise ValueError(
+                f"Model {model} is incompatible with weights {weights}. "
+                f"Expected weights starting with '{model}'."
+            )
+
+
 def load_resnet(
     model: Literal[
         "resnet18",
@@ -709,7 +755,26 @@ def load_resnet(
         "wide_resnet50_2",
         "wide_resnet101_2",
     ],
-    weights: str | None = None,
+    weights: Literal[
+        "resnet18_IMAGENET1K_V1",
+        "resnet34_IMAGENET1K_V1",
+        "resnet50_IMAGENET1K_V1",
+        "resnet50_IMAGENET1K_V2",
+        "resnet101_IMAGENET1K_V1",
+        "resnet101_IMAGENET1K_V2",
+        "resnet152_IMAGENET1K_V1",
+        "resnet152_IMAGENET1K_V2",
+        "resnext50_32X4D_IMAGENET1K_V1",
+        "resnext50_32X4D_IMAGENET1K_V2",
+        "resnext101_32X8D_IMAGENET1K_V1",
+        "resnext101_32X8D_IMAGENET1K_V2",
+        "resnext101_64X4D_IMAGENET1K_V1",
+        "wide_resnet50_2_IMAGENET1K_V1",
+        "wide_resnet50_2_IMAGENET1K_V2",
+        "wide_resnet101_2_IMAGENET1K_V1",
+        "wide_resnet101_2_IMAGENET1K_V2",
+    ]
+    | None = None,
     n_classes: int = 1000,
     cache: bool = True,
     *,
@@ -757,6 +822,7 @@ def load_resnet(
             raise ValueError(f"Unknown model name: {model}")
 
     if weights is not None:
+        _assert_model_and_weights_fit(model, weights)
         resnet, state = _with_weights((resnet, state), weights, cache)
 
     assert resnet is not None
