@@ -99,3 +99,8 @@ def test_SqueezeExcitation():
     torch_output = torch_squeeze(torch.from_numpy(x))
 
     assert np.allclose(np.array(jax_output), torch_output.detach().numpy(), atol=1e-6)
+
+
+def test_mbconv():
+    # TODO: Do this next
+    pass
