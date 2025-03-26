@@ -229,8 +229,8 @@ class SqueezeExcitation(eqx.Module):
     def _scale(
         self,
         input: Array,
-        activation: Callable[..., Array] = jax.nn.relu,
-        scale_activation: Callable[..., Array] = jax.nn.sigmoid,
+        activation: Callable[..., Array],
+        scale_activation: Callable[..., Array],
     ) -> Array:
         scale = self.avgpool(input)
         scale = self.fc1(scale)
@@ -244,7 +244,7 @@ class SqueezeExcitation(eqx.Module):
         activation: Callable[..., Array] = jax.nn.relu,
         scale_activation: Callable[..., Array] = jax.nn.sigmoid,
     ) -> Array:
-        scale = self._scale(x)
+        scale = self._scale(x, activation, scale_activation)
         return scale * x
 
 
@@ -339,7 +339,7 @@ class MBConv(eqx.Module):
         else:
             result = x
         result, state = self.depthwise_conv2d(result, state, inference)
-        result = self.se_layer(result)
+        result = self.se_layer(result, activation=jax.nn.silu)
 
         result, state = self.project_conv2d(result, state, inference)
 
