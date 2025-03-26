@@ -6,9 +6,13 @@ import jax.numpy as jnp
 import numpy as np
 import torch
 from torchvision.ops.misc import Conv2dNormActivation as TorchConv2dNormActivation
+from torchvision.ops.misc import SqueezeExcitation as TorchSqueezeExcitation
 
 from jaxonmodels.layers.batch_norm import BatchNorm
-from jaxonmodels.models.efficientnet import Conv2dNormActivation
+from jaxonmodels.models.efficientnet import (  # , SqueezeExcitation
+    Conv2dNormActivation,
+    SqueezeExcitation,
+)
 from jaxonmodels.statedict2pytree.s2p import (
     convert,
     move_running_fields_to_the_end,
@@ -69,4 +73,29 @@ def test_Conv2dNormActivation():
 
 
 def test_SqueezeExcitation():
-    pass
+    input_channels = 96
+    squeeze_channels = 4
+
+    key = jax.random.key(42)
+    jax_squeeze = SqueezeExcitation(input_channels, squeeze_channels, key=key)
+    torch_squeeze = TorchSqueezeExcitation(input_channels, squeeze_channels)
+
+    weights_dict = torch_squeeze.state_dict()
+    torchfields = state_dict_to_fields(weights_dict)
+    torchfields = move_running_fields_to_the_end(torchfields)
+    jaxfields, state_indices = pytree_to_fields(jax_squeeze)
+
+    jax_squeeze = convert(
+        weights_dict,
+        jax_squeeze,
+        jaxfields,
+        state_indices,
+        torchfields,
+    )
+
+    x = np.array(np.random.normal(size=(96, 112, 112)), dtype=np.float32)
+
+    jax_output = jax_squeeze(jnp.array(x))
+    torch_output = torch_squeeze(torch.from_numpy(x))
+
+    assert np.allclose(np.array(jax_output), torch_output.detach().numpy(), atol=1e-6)

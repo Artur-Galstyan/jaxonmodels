@@ -240,12 +240,12 @@ class SqueezeExcitation(eqx.Module):
 
     def __call__(
         self,
-        input: Array,
+        x: Array,
         activation: Callable[..., Array] = jax.nn.relu,
         scale_activation: Callable[..., Array] = jax.nn.sigmoid,
     ) -> Array:
-        scale = self._scale(input)
-        return scale * input
+        scale = self._scale(x)
+        return scale * x
 
 
 class StochasticDepth(eqx.Module):
