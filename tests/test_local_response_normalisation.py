@@ -3,7 +3,7 @@ import jax.numpy as jnp
 import numpy as np
 import torch
 
-from jaxonmodels.layers.local_response_normalisation import LocalResponseNormalization
+from jaxonmodels.layers import LocalResponseNormalization
 
 
 def test_local_response_normalisation_against_pytorch():

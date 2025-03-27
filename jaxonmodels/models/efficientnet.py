@@ -1,10 +1,8 @@
-import collections
 import copy
 import functools
 import math
 import os
 from dataclasses import dataclass
-from itertools import repeat
 from pathlib import Path
 from urllib.request import urlretrieve
 
@@ -12,10 +10,10 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 from beartype.typing import Any, Callable, Literal, Sequence
-from jaxtyping import Array, Float, PRNGKeyArray
+from jaxtyping import Array, PRNGKeyArray
 
-from jaxonmodels.functions.functions import stochastic_depth
-from jaxonmodels.layers.batch_norm import BatchNorm
+from jaxonmodels.functions.functions import make_divisible, stochastic_depth
+from jaxonmodels.layers import BatchNorm, Conv2dNormActivation
 from jaxonmodels.statedict2pytree.s2p import (
     convert,
     move_running_fields_to_the_end,
@@ -40,28 +38,6 @@ _MODELS = {
 }
 
 
-def _make_divisible(v: float, divisor: int, min_value: int | None = None) -> int:
-    """
-    This function is taken from the original tf repo.
-    It ensures that all layers have a channel number that is divisible by 8
-    It can be seen here:
-    https://github.com/tensorflow/models/blob/master/research/slim/nets/mobilenet/mobilenet.py
-    """
-    if min_value is None:
-        min_value = divisor
-    new_v = max(min_value, int(v + divisor / 2) // divisor * divisor)
-    # Make sure that round down does not go down by more than 10%.
-    if new_v < 0.9 * v:
-        new_v += divisor
-    return new_v
-
-
-def _make_ntuple(x: Any, n: int) -> tuple[Any, ...]:
-    if isinstance(x, collections.abc.Iterable):  # pyright: ignore
-        return tuple(x)
-    return tuple(repeat(x, n))
-
-
 @dataclass
 class _MBConvConfig:
     expand_ratio: float
@@ -76,7 +52,7 @@ class _MBConvConfig:
     def adjust_channels(
         channels: int, width_mult: float, min_value: int | None = None
     ) -> int:
-        return _make_divisible(channels * width_mult, 8, min_value)
+        return make_divisible(channels * width_mult, 8, min_value)
 
 
 class MBConvConfig(_MBConvConfig):
@@ -133,86 +109,6 @@ class FusedMBConvConfig(_MBConvConfig):
         )
 
 
-class Conv2dNormActivation(eqx.Module):
-    conv2d: eqx.nn.Conv2d
-    norm: eqx.Module | None
-    activation: eqx.nn.Lambda | None
-
-    def __init__(
-        self,
-        in_channels: int,
-        out_channels: int,
-        kernel_size: int | Sequence[int] = 3,
-        stride: int | Sequence[int] = 1,
-        padding: str | int | Sequence[int] | Sequence[tuple[int, int]] | None = None,
-        groups: int = 1,
-        norm_layer: Callable[..., eqx.Module] | None = BatchNorm,
-        activation_layer: Callable[..., Array] | None = jax.nn.relu,
-        dilation: int | Sequence[int] = 1,
-        use_bias: bool | None = None,
-        dtype=None,
-        axis_name: str = "batch",
-        *,
-        key: PRNGKeyArray,
-    ):
-        if padding is None:
-            if isinstance(kernel_size, int) and isinstance(dilation, int):
-                padding = (kernel_size - 1) // 2 * dilation
-            else:
-                _conv_dim = (
-                    len(kernel_size)
-                    if isinstance(kernel_size, Sequence)
-                    else len(dilation)  # pyright: ignore
-                )
-                kernel_size = _make_ntuple(kernel_size, _conv_dim)
-                dilation = _make_ntuple(dilation, _conv_dim)
-                padding = tuple(
-                    (kernel_size[i] - 1) // 2 * dilation[i] for i in range(_conv_dim)
-                )
-        if use_bias is None:
-            use_bias = norm_layer is None
-
-        key, subkey = jax.random.split(key)
-
-        self.conv2d = eqx.nn.Conv2d(
-            in_channels=in_channels,
-            out_channels=out_channels,
-            kernel_size=kernel_size,
-            stride=stride,
-            padding=padding,
-            dilation=dilation,
-            groups=groups,
-            use_bias=use_bias,
-            dtype=dtype,
-            key=subkey,
-        )
-
-        if norm_layer is not None:
-            self.norm = norm_layer(out_channels, axis_name=axis_name)
-
-        if activation_layer is not None:
-            self.activation = eqx.nn.Lambda(activation_layer)
-        else:
-            self.activation = None
-
-    def __call__(
-        self,
-        x: Float[Array, "c h w"],
-        state: eqx.nn.State,
-        inference: bool,
-        key: PRNGKeyArray | None = None,
-    ) -> tuple[Float[Array, "c_out h_out w_out"], eqx.nn.State]:
-        x = self.conv2d(x)
-
-        if self.norm:
-            x, state = self.norm(x, state, inference=inference)  # pyright: ignore
-
-        if self.activation:
-            x = self.activation(x)
-
-        return x, state
-
-
 class SqueezeExcitation(eqx.Module):
     avgpool: eqx.nn.AdaptiveAvgPool2d
     fc1: eqx.nn.Conv2d
@@ -228,11 +124,11 @@ class SqueezeExcitation(eqx.Module):
 
     def _scale(
         self,
-        input: Array,
+        x: Array,
         activation: Callable[..., Array],
         scale_activation: Callable[..., Array],
     ) -> Array:
-        scale = self.avgpool(input)
+        scale = self.avgpool(x)
         scale = self.fc1(scale)
         scale = activation(scale)
         scale = self.fc2(scale)

@@ -9,7 +9,7 @@ import jax.numpy as jnp
 from beartype.typing import Literal
 from jaxtyping import Array, Float, PRNGKeyArray
 
-from jaxonmodels.layers.batch_norm import BatchNorm
+from jaxonmodels.layers import BatchNorm
 from jaxonmodels.statedict2pytree.s2p import (
     convert,
     move_running_fields_to_the_end,

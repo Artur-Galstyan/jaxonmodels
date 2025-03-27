@@ -7,7 +7,7 @@ import numpy as np
 import torch
 from jaxtyping import Array, Float
 
-from jaxonmodels.layers.batch_norm import BatchNorm
+from jaxonmodels.layers import BatchNorm
 from jaxonmodels.statedict2pytree.s2p import (
     convert,
     move_running_fields_to_the_end,

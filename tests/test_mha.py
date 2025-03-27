@@ -8,7 +8,7 @@ import pytest
 import torch
 import torch.nn as nn
 
-from jaxonmodels.layers.multi_head_attention import MultiheadAttention
+from jaxonmodels.layers import MultiheadAttention
 
 
 def transfer_weights_to_torch(jax_mha, torch_mha):

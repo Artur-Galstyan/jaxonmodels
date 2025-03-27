@@ -9,7 +9,7 @@ from beartype.typing import Any, Literal
 from jaxtyping import Array, Float, Int, PRNGKeyArray, PyTree
 
 import jaxonmodels.functions as F
-from jaxonmodels.layers.batch_norm import BatchNorm
+from jaxonmodels.layers import BatchNorm
 from jaxonmodels.layers.multi_head_attention import MultiheadAttention
 from jaxonmodels.statedict2pytree.s2p import (
     convert,

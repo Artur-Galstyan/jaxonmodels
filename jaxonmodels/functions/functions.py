@@ -2,12 +2,14 @@ import gzip
 import html
 import os
 from functools import lru_cache
+from itertools import repeat
 
 import equinox as eqx
 import ftfy
 import jax
 import jax.numpy as jnp
 import regex as re
+from beartype.typing import Any
 from jaxtyping import Array, Float, Int, PRNGKeyArray
 
 __all__ = [
@@ -487,3 +489,52 @@ def kaiming_init_conv2d(model, state, key):
     model = eqx.tree_at(get_weights, model, new_weights)
 
     return model, state
+
+
+def make_divisible(v: float, divisor: int, min_value: int | None = None) -> int:
+    """
+    This function is taken from the original tf repo.
+    It ensures that all layers have a channel number that is divisible by 8
+    It can be seen here:
+    https://github.com/tensorflow/models/blob/master/research/slim/nets/mobilenet/mobilenet.py
+    """
+    if min_value is None:
+        min_value = divisor
+    new_v = max(min_value, int(v + divisor / 2) // divisor * divisor)
+    # Make sure that round down does not go down by more than 10%.
+    if new_v < 0.9 * v:
+        new_v += divisor
+    return new_v
+
+
+def make_ntuple(x: Any, n: int) -> tuple[Any, ...]:
+    if isinstance(x, collections.abc.Iterable):  # pyright: ignore
+        return tuple(x)
+    return tuple(repeat(x, n))
+
+
+def selective_scan(
+    x: Float[Array, "seq_length d_inner"],
+    delta: Float[Array, "seq_length d_inner"],
+    A: Float[Array, "d_inner d_state"],
+    B: Float[Array, "seq_length d_state"],
+    C: Float[Array, "seq_length d_state"],
+    D: Float[Array, " d_inner"],
+) -> Float[Array, "seq_length d_inner"]:
+    L, d_inner = x.shape
+    _, d_state = A.shape
+    delta_A = jnp.exp(jnp.einsum("l d,d n -> l d n", delta, A))
+    delta_B_u = jnp.einsum("l d,l n,l d -> l d n", delta, B, x)
+
+    x_res = jnp.zeros(shape=(d_inner, d_state))
+
+    def step(x, i):
+        x = delta_A[i] * x + delta_B_u[i]
+
+        y = jnp.einsum("d n,n -> d", x, C[i, :])
+        return x, y
+
+    _, ys = jax.lax.scan(step, x_res, jnp.arange(L))
+
+    ys = ys + x * D
+    return ys
