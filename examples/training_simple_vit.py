@@ -250,11 +250,6 @@ optimizer = optax.chain(
     ),
 )
 
-# optimizer = optax.adamw(
-#     learning_rate=base_lr  # lr_schedule, weight_decay=weight_decay, b1=0.9, b2=0.999, eps=1e-8
-# )
-
-
 opt_state = optimizer.init(eqx.filter(model, eqx.is_array))
 key = jax.random.key(99)
 n_epochs = 100

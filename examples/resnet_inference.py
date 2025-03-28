@@ -8,7 +8,7 @@ import requests
 from PIL import Image
 from torchvision import transforms
 
-from jaxonmodels.models.resnet import resnet50
+from jaxonmodels.models.resnet import load_resnet
 
 
 def get_imagenet_labels():
@@ -44,7 +44,9 @@ def preprocess_image(image_path):
 def main():
     # Load model with pre-trained weights
     # r, s = resnet18(weights="resnet18_IMAGENET1K_V1", key=jax.random.key(0))
-    r, s = resnet50(weights="resnet50_IMAGENET1K_V2", key=jax.random.key(0))
+    r, s = load_resnet(
+        model="resnet50", weights="resnet50_IMAGENET1K_V2", key=jax.random.key(0)
+    )
     # Set model to inference mode for batch normalization
     r = ft.partial(r, inference=True)
 

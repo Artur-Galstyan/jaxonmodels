@@ -89,10 +89,6 @@ logits_per_image, logits_per_text, state = eqx.filter_vmap(
     clip_pt, in_axes=(None, 0, None), out_axes=(0, 0, None), axis_name="batch"
 )(image, text, state)
 
-print(f"{logits_per_image.shape=}, {logits_per_image=}")
-print(f"{logits_per_text.shape=}, {logits_per_text=}")
-
-# Get probabilities using softmax
 image_probs = jax.nn.softmax(logits_per_image)
 probs = image_probs
 

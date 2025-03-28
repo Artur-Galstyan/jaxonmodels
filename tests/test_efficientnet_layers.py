@@ -12,12 +12,11 @@ from torchvision.models.efficientnet import MBConvConfig as TorchMBConvConfig
 from torchvision.ops.misc import Conv2dNormActivation as TorchConv2dNormActivation
 from torchvision.ops.misc import SqueezeExcitation as TorchSqueezeExcitation
 
-from jaxonmodels.layers import BatchNorm
-from jaxonmodels.models.efficientnet import (  # , SqueezeExcitation
+from jaxonmodels.layers import BatchNorm, SqueezeExcitation
+from jaxonmodels.models.efficientnet import (
     Conv2dNormActivation,
     MBConv,
     MBConvConfig,
-    SqueezeExcitation,
 )
 from jaxonmodels.statedict2pytree.s2p import (
     convert,

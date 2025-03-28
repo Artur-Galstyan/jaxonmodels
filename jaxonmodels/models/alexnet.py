@@ -7,7 +7,7 @@ import jax
 import jax.numpy as jnp
 import jaxtyping as jt
 
-from jaxonmodels.layers.local_response_normalisation import LocalResponseNormalization
+from jaxonmodels.layers import LocalResponseNormalization
 from jaxonmodels.statedict2pytree.s2p import (
     convert,
     pytree_to_fields,

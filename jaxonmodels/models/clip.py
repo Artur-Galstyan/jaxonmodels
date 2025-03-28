@@ -9,8 +9,7 @@ from beartype.typing import Any, Literal
 from jaxtyping import Array, Float, Int, PRNGKeyArray, PyTree
 
 import jaxonmodels.functions as F
-from jaxonmodels.layers import BatchNorm
-from jaxonmodels.layers.multi_head_attention import MultiheadAttention
+from jaxonmodels.layers import BatchNorm, MultiheadAttention
 from jaxonmodels.statedict2pytree.s2p import (
     convert,
     move_running_fields_to_the_end,
@@ -587,9 +586,6 @@ class CLIP(eqx.Module):
         if attn_mask is None:
             attn_mask = F.build_attention_mask(self.context_length)
         text_features = self.encode_text(text, attn_mask)
-
-        print(f"{image_features=}")
-        print(f"{text_features=}")
 
         image_norm = jnp.linalg.norm(image_features, axis=-1, keepdims=True)
         text_norm = jnp.linalg.norm(text_features, axis=-1, keepdims=True)

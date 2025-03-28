@@ -3,7 +3,7 @@ import jax
 import jax.numpy as jnp
 from jaxtyping import Array, Float, PRNGKeyArray
 
-from jaxonmodels.layers.multi_head_attention import MultiheadAttention
+from jaxonmodels.layers import MultiheadAttention
 
 
 class ResidualAttentionBlock(eqx.Module):
