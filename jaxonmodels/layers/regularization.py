@@ -1,7 +1,7 @@
 import equinox as eqx
 from jaxtyping import Array, PRNGKeyArray
 
-from jaxonmodels.functions.functions import (
+from jaxonmodels.functions import (
     stochastic_depth,
 )
 

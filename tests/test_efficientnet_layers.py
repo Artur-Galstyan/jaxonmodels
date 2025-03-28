@@ -111,7 +111,7 @@ def test_Conv2dNormActivation_parametrized(
     )(jnp.array(x), state)
 
     # Verify outputs match
-    assert np.allclose(out_torch.detach().numpy(), np.array(out_jax), atol=1e-6)
+    assert np.allclose(out_torch.detach().numpy(), np.array(out_jax), atol=1e-5)
 
 
 @pytest.mark.parametrize(

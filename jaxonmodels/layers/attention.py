@@ -1,9 +1,10 @@
 import equinox as eqx
 import jax
 import jax.numpy as jnp
+from beartype.typing import Callable
 from jaxtyping import Array, PRNGKeyArray
 
-from jaxonmodels.functions.functions import (
+from jaxonmodels.functions import (
     canonical_mask,
     multi_head_attention_forward,
 )
@@ -187,3 +188,30 @@ class MultiheadAttention(eqx.Module):
             )
 
         return attn_output, attn_output_weights
+
+
+class SqueezeExcitation(eqx.Module):
+    avgpool: eqx.nn.AdaptiveAvgPool2d
+    fc1: eqx.nn.Conv2d
+    fc2: eqx.nn.Conv2d
+
+    def __init__(
+        self, input_channels: int, squeeze_channels: int, *, key: PRNGKeyArray
+    ) -> None:
+        self.avgpool = eqx.nn.AdaptiveAvgPool2d(1)
+        key, subkey = jax.random.split(key)
+        self.fc1 = eqx.nn.Conv2d(input_channels, squeeze_channels, 1, key=key)
+        self.fc2 = eqx.nn.Conv2d(squeeze_channels, input_channels, 1, key=subkey)
+
+    def __call__(
+        self,
+        x: Array,
+        activation: Callable[..., Array] = jax.nn.relu,
+        scale_activation: Callable[..., Array] = jax.nn.sigmoid,
+    ) -> Array:
+        scale = self.avgpool(x)
+        scale = self.fc1(scale)
+        scale = activation(scale)
+        scale = self.fc2(scale)
+        scale = scale_activation(scale)
+        return scale * x

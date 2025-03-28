@@ -6,7 +6,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-from jaxonmodels.functions.functions import multi_head_attention_forward
+from jaxonmodels.functions import multi_head_attention_forward
 
 
 def test_compare_mha_with_pytorch():

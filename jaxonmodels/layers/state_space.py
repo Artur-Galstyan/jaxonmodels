@@ -3,7 +3,7 @@ import jax
 import jax.numpy as jnp
 from jaxtyping import Array, Float, PRNGKeyArray
 
-from jaxonmodels.functions.functions import selective_scan
+from jaxonmodels.functions import selective_scan
 
 
 class SelectiveStateSpaceModel(eqx.Module):

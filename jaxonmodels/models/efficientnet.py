@@ -10,17 +10,13 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 from beartype.typing import Any, Callable, Literal, Sequence
-from jaxtyping import Array, PRNGKeyArray
+from jaxtyping import Array, Float, PRNGKeyArray
 
-from jaxonmodels.functions.functions import make_divisible
-from jaxonmodels.layers import (
-    BatchNorm,
-    Conv2dNormActivation,
-    DropoutClassifier,
-    FusedMBConv,
-    InvertedResidualBlock,
-    MBConv,
+from jaxonmodels.functions import (
+    make_divisible,
+    make_ntuple,
 )
+from jaxonmodels.layers import BatchNorm, SqueezeExcitation, StochasticDepth
 from jaxonmodels.statedict2pytree.s2p import (
     convert,
     move_running_fields_to_the_end,
@@ -116,10 +112,284 @@ class FusedMBConvConfig(_MBConvConfig):
         )
 
 
+class Conv2dNormActivation(eqx.Module):
+    conv2d: eqx.nn.Conv2d
+    norm: eqx.Module | None
+    activation: eqx.nn.Lambda | None
+
+    def __init__(
+        self,
+        in_channels: int,
+        out_channels: int,
+        kernel_size: int | Sequence[int] = 3,
+        stride: int | Sequence[int] = 1,
+        padding: str | int | Sequence[int] | Sequence[tuple[int, int]] | None = None,
+        groups: int = 1,
+        norm_layer: Callable[..., eqx.Module] | None = BatchNorm,
+        activation_layer: Callable[..., Array] | None = jax.nn.relu,
+        dilation: int | Sequence[int] = 1,
+        use_bias: bool | None = None,
+        dtype=None,
+        axis_name: str = "batch",
+        *,
+        key: PRNGKeyArray,
+    ):
+        if padding is None:
+            if isinstance(kernel_size, int) and isinstance(dilation, int):
+                padding = (kernel_size - 1) // 2 * dilation
+            else:
+                _conv_dim = (
+                    len(kernel_size)
+                    if isinstance(kernel_size, Sequence)
+                    else len(dilation)  # pyright: ignore
+                )
+                kernel_size = make_ntuple(kernel_size, _conv_dim)
+                dilation = make_ntuple(dilation, _conv_dim)
+                padding = tuple(
+                    (kernel_size[i] - 1) // 2 * dilation[i] for i in range(_conv_dim)
+                )
+        if use_bias is None:
+            use_bias = norm_layer is None
+
+        key, subkey = jax.random.split(key)
+
+        self.conv2d = eqx.nn.Conv2d(
+            in_channels=in_channels,
+            out_channels=out_channels,
+            kernel_size=kernel_size,
+            stride=stride,
+            padding=padding,
+            dilation=dilation,
+            groups=groups,
+            use_bias=use_bias,
+            dtype=dtype,
+            key=subkey,
+        )
+
+        if norm_layer is not None:
+            self.norm = norm_layer(out_channels, axis_name=axis_name)
+
+        if activation_layer is not None:
+            self.activation = eqx.nn.Lambda(activation_layer)
+        else:
+            self.activation = None
+
+    def __call__(
+        self,
+        x: Float[Array, "c h w"],
+        state: eqx.nn.State,
+        inference: bool,
+        key: PRNGKeyArray | None = None,
+    ) -> tuple[Float[Array, "c_out h_out w_out"], eqx.nn.State]:
+        x = self.conv2d(x)
+
+        if self.norm:
+            x, state = self.norm(x, state, inference=inference)  # pyright: ignore
+
+        if self.activation:
+            x = self.activation(x)
+
+        return x, state
+
+
+class MBConv(eqx.Module):
+    use_res_connect: bool = eqx.field(static=True)
+
+    expand_conv2d: Conv2dNormActivation | None
+    depthwise_conv2d: Conv2dNormActivation
+    se_layer: SqueezeExcitation
+
+    project_conv2d: Conv2dNormActivation
+    stochastic_depth: StochasticDepth
+
+    def __init__(
+        self,
+        cnf,
+        stochastic_depth_prob: float,
+        key: PRNGKeyArray,
+    ):
+        if not (1 <= cnf.stride <= 2):
+            raise ValueError("illegal stride value")
+
+        self.use_res_connect = (
+            cnf.stride == 1 and cnf.input_channels == cnf.out_channels
+        )
+
+        activation_layer = jax.nn.silu
+
+        # expand
+        expanded_channels = cnf.adjust_channels(cnf.input_channels, cnf.expand_ratio)
+        if expanded_channels != cnf.input_channels:
+            key, subkey = jax.random.split(key)
+            self.expand_conv2d = Conv2dNormActivation(
+                cnf.input_channels,
+                expanded_channels,
+                kernel_size=1,
+                norm_layer=BatchNorm,
+                activation_layer=activation_layer,
+                key=subkey,
+            )
+        else:
+            self.expand_conv2d = None
+
+        # depthwise
+        key, subkey = jax.random.split(key)
+        self.depthwise_conv2d = Conv2dNormActivation(
+            expanded_channels,
+            expanded_channels,
+            kernel_size=cnf.kernel,
+            stride=cnf.stride,
+            groups=expanded_channels,
+            norm_layer=BatchNorm,
+            activation_layer=activation_layer,
+            key=subkey,
+        )
+        squeeze_channels = max(1, cnf.input_channels // 4)
+
+        key, subkey = jax.random.split(key)
+        self.se_layer = SqueezeExcitation(
+            expanded_channels, squeeze_channels, key=subkey
+        )
+
+        # project
+        key, subkey = jax.random.split(key)
+        self.project_conv2d = Conv2dNormActivation(
+            expanded_channels,
+            cnf.out_channels,
+            kernel_size=1,
+            norm_layer=BatchNorm,
+            activation_layer=None,
+            key=subkey,
+        )
+        self.stochastic_depth = StochasticDepth(stochastic_depth_prob, "row")
+
+    def __call__(
+        self, x: Array, state: eqx.nn.State, inference: bool, key: PRNGKeyArray
+    ):
+        if self.expand_conv2d:
+            result, state = self.expand_conv2d(x, state, inference)
+        else:
+            result = x
+        result, state = self.depthwise_conv2d(result, state, inference)
+        result = self.se_layer(result, activation=jax.nn.silu)
+
+        result, state = self.project_conv2d(result, state, inference)
+
+        if self.use_res_connect:
+            result = self.stochastic_depth(result, inference=inference, key=key)
+            result += x
+        return result, state
+
+
+class FusedMBConv(eqx.Module):
+    fused_expand: Conv2dNormActivation
+    project: Conv2dNormActivation | None
+    stochastic_depth: StochasticDepth
+
+    use_res_connect: bool = eqx.field(static=True)
+
+    def __init__(
+        self,
+        cnf,
+        stochastic_depth_prob: float,
+        key: PRNGKeyArray,
+    ):
+        if not (1 <= cnf.stride <= 2):
+            raise ValueError("illegal stride value")
+
+        self.use_res_connect = (
+            cnf.stride == 1 and cnf.input_channels == cnf.out_channels
+        )
+
+        expanded_channels = cnf.adjust_channels(cnf.input_channels, cnf.expand_ratio)
+        if expanded_channels != cnf.input_channels:
+            # fused expand
+            key, subkey, subkey2 = jax.random.split(key, 3)
+            self.fused_expand = Conv2dNormActivation(
+                cnf.input_channels,
+                expanded_channels,
+                kernel_size=cnf.kernel,
+                stride=cnf.stride,
+                norm_layer=BatchNorm,
+                activation_layer=jax.nn.silu,
+                key=subkey,
+            )
+
+            # project
+            self.project = Conv2dNormActivation(
+                expanded_channels,
+                cnf.out_channels,
+                kernel_size=1,
+                norm_layer=BatchNorm,
+                activation_layer=None,
+                key=subkey2,
+            )
+        else:
+            key, subkey = jax.random.split(key)
+            self.fused_expand = Conv2dNormActivation(
+                cnf.input_channels,
+                cnf.out_channels,
+                kernel_size=cnf.kernel,
+                stride=cnf.stride,
+                norm_layer=BatchNorm,
+                activation_layer=jax.nn.silu,
+                key=subkey,
+            )
+            self.project = None
+
+        self.stochastic_depth = StochasticDepth(stochastic_depth_prob, "row")
+
+    def __call__(
+        self, x: Array, state: eqx.nn.State, inference: bool, key: PRNGKeyArray
+    ) -> tuple[Array, eqx.nn.State]:
+        result, state = self.fused_expand(x, state, inference)
+
+        if self.project:
+            result, state = self.project(result, state, inference)
+
+        if self.use_res_connect:
+            result = self.stochastic_depth(result, inference, key)
+            result += x
+        return result, state
+
+
+class InvertedResidualBlock(eqx.Module):
+    layers: list[MBConv | FusedMBConv]
+
+    def __init__(self, layers: list[MBConv | FusedMBConv]):
+        self.layers = layers
+
+    def __call__(
+        self, x: Array, state: eqx.nn.State, inference: bool, key: PRNGKeyArray
+    ) -> tuple[Array, eqx.nn.State]:
+        for stage in self.layers:
+            key, subkey = jax.random.split(key)
+            x, state = stage(x, state, inference, subkey)
+
+        return x, state
+
+
+class Classifier(eqx.Module):
+    dropout: eqx.nn.Dropout
+    linear: eqx.nn.Linear
+
+    def __init__(
+        self, p: float, in_features: int, out_features: int, key: PRNGKeyArray
+    ):
+        self.dropout = eqx.nn.Dropout(p=p)
+        self.linear = eqx.nn.Linear(in_features, out_features, key=key)
+
+    def __call__(self, x: Array, inference: bool, key: PRNGKeyArray) -> Array:
+        x = self.dropout(x, inference=inference, key=key)
+        x = self.linear(x)
+
+        return x
+
+
 class EfficientNet(eqx.Module):
     features: list[Conv2dNormActivation | MBConv | FusedMBConv | InvertedResidualBlock]
     avgpool: eqx.nn.AdaptiveAvgPool2d
-    classifier: DropoutClassifier
+    classifier: Classifier
 
     def __init__(
         self,
@@ -197,7 +467,7 @@ class EfficientNet(eqx.Module):
 
         self.avgpool = eqx.nn.AdaptiveAvgPool2d(1)
         key, subkey = jax.random.split(key)
-        self.classifier = DropoutClassifier(
+        self.classifier = Classifier(
             dropout, lastconv_output_channels, n_classes, subkey
         )
         # todo: kaiming init
