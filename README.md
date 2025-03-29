@@ -11,12 +11,12 @@ Some models will have inadvertently repeated code, but this is fine so long as t
 ## Implemented Models
 
 These models have been implemented:
-- [ ] AlexNet
-- [ ] CLIP
-- [ ] EfficientNet
-- [ ] ResNet
-- [ ] ViT
-- [ ] Mamba
+- [x] AlexNet
+- [x] CLIP
+- [x] EfficientNet
+- [x] ResNet
+- [x] ViT
+- [x] Mamba
 
 
 ## Contributing
