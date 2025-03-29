@@ -1,6 +1,6 @@
 import jax
 import jax.numpy as jnp
-from jaxtyping import Array, Float, PRNGKeyArray
+from jaxtyping import Array, Bool, Float, PRNGKeyArray
 
 
 def multi_head_attention_forward(
@@ -18,7 +18,7 @@ def multi_head_attention_forward(
     out_proj_weight: Float[Array, "d_model d_model"] | None = None,
     out_proj_bias: Float[Array, "d_model"] | None = None,
     inference: bool = False,
-    key_padding_mask: Float[Array, "src_len"] | None = None,
+    key_padding_mask: Float[Array, "src_len"] | Bool[Array, "src_len"] | None = None,
     attn_mask: Float[Array, "tgt_len src_len"] | None = None,
     need_weights: bool = True,
     use_separate_proj_weight: bool = False,
@@ -32,7 +32,10 @@ def multi_head_attention_forward(
     dropout_key: PRNGKeyArray | None = None,
 ) -> tuple[
     Float[Array, "tgt_len d_model"],
-    Float[Array, "num_heads tgt_len src_len"] | Float[Array, "tgt_len src_len"] | None,
+    Float[Array, "num_heads tgt_len src_len"]
+    | Float[Array, "tgt_len src_len"]
+    | Float[Array, "tgt_len src_len+1"]
+    | None,
 ]:
     tgt_len, d_model = query.shape
     src_len, k_dim = key.shape

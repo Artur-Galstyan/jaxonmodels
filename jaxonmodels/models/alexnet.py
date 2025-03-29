@@ -6,6 +6,7 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 import jaxtyping as jt
+from beartype.typing import Any
 
 from jaxonmodels.layers import LocalResponseNormalization
 from jaxonmodels.statedict2pytree.s2p import (
@@ -36,7 +37,9 @@ class AlexNet(eqx.Module):
 
     final: eqx.nn.Linear
 
-    def __init__(self, *, n_classes: int, key: jt.PRNGKeyArray):
+    def __init__(
+        self, *, n_classes: int, key: jt.PRNGKeyArray, dtype: Any | None = None
+    ):
         _, *subkeys = jax.random.split(key, 10)
         self.conv1 = eqx.nn.Conv2d(
             in_channels=3,

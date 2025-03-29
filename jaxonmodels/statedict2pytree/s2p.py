@@ -140,7 +140,9 @@ def move_running_fields_to_the_end(
     return torchfields
 
 
-def state_dict_to_fields(state_dict: dict[str, np.ndarray]) -> list[TorchField]:
+def state_dict_to_fields(
+    state_dict: dict[str, Array | torch.Tensor],
+) -> list[TorchField]:
     if state_dict is None:
         return []
     fields: list[TorchField] = []

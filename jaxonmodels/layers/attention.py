@@ -103,8 +103,8 @@ class MultiheadAttention(eqx.Module):
         if add_bias_kv:
             normal_initializer = jax.nn.initializers.normal()
             key, *subkeys = jax.random.split(key, 3)
-            self.bias_k = normal_initializer(key=subkeys[0], shape=(1, 1, embed_dim))
-            self.bias_v = normal_initializer(key=subkeys[0], shape=(1, 1, embed_dim))
+            self.bias_k = normal_initializer(key=subkeys[0], shape=(1, embed_dim))
+            self.bias_v = normal_initializer(key=subkeys[0], shape=(1, embed_dim))
         else:
             self.bias_k = None
             self.bias_v = None
@@ -137,7 +137,6 @@ class MultiheadAttention(eqx.Module):
             target_type=query.dtype,
             check_other=False,
         )
-
         if not self._qkv_same_embed_dim:
             attn_output, attn_output_weights = multi_head_attention_forward(
                 query,
