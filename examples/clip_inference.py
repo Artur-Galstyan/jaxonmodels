@@ -81,7 +81,7 @@ image_pil = Image.open("cat.jpg")
 image = transform_image(image_pil, image_resolution)
 
 # Load CLIP model
-clip, state = load_clip(model="ViT-B/32", with_weights=True)
+clip, state = load_clip(model="ViT-B/32", with_weights=True, dtype=jnp.float16)
 clip_pt = functools.partial(clip, inference=True)
 
 # Run the model with vmap for batching

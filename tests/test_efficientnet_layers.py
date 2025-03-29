@@ -12,6 +12,7 @@ from torchvision.models.efficientnet import MBConvConfig as TorchMBConvConfig
 from torchvision.ops.misc import Conv2dNormActivation as TorchConv2dNormActivation
 from torchvision.ops.misc import SqueezeExcitation as TorchSqueezeExcitation
 
+from jaxonmodels.functions.utils import default_floating_dtype
 from jaxonmodels.layers import BatchNorm, SqueezeExcitation
 from jaxonmodels.models.efficientnet import (
     Conv2dNormActivation,
@@ -45,6 +46,7 @@ def test_Conv2dNormActivation_parametrized(
     norm_layer,
     activation_layer,
 ):
+    dtype = default_floating_dtype()
     key = jax.random.key(42)
 
     # Create JAX version
@@ -57,6 +59,7 @@ def test_Conv2dNormActivation_parametrized(
         norm_layer=norm_layer,
         activation_layer=activation_layer,
         key=key,
+        dtype=dtype,
     )
 
     # Create PyTorch version - convert JAX functions to torch equivalents
@@ -124,6 +127,7 @@ def test_Conv2dNormActivation_parametrized(
 def test_Conv2dNormActivation_groups(
     in_channels, out_channels, kernel_size, stride, groups
 ):
+    dtype = default_floating_dtype()
     key = jax.random.key(42)
 
     # Create JAX version
@@ -136,6 +140,7 @@ def test_Conv2dNormActivation_groups(
         norm_layer=BatchNorm,
         activation_layer=jax.nn.silu,
         key=key,
+        dtype=dtype,
     )
 
     # Create PyTorch version
@@ -263,6 +268,7 @@ def test_mbconv_forward(
     height,
     width,
 ):
+    dtype = default_floating_dtype()
     t_cnf = TorchMBConvConfig(
         expand_ratio=expand_ratio,
         kernel=kernel,
@@ -284,7 +290,7 @@ def test_mbconv_forward(
     )
     key = jax.random.key(42)
     jax_mbconv, state = eqx.nn.make_with_state(MBConv)(
-        j_cnf, stochastic_depth_prob, key=key
+        j_cnf, stochastic_depth_prob, key=key, dtype=dtype
     )
 
     weights_dict = torch_mbconv.state_dict()

@@ -44,8 +44,9 @@ image_path = os.path.join(current_dir, "cat.jpg")
 jax_input = preprocess_image(image_path)[0]
 
 
-anet = alexnet(with_weights=True)
-jax_output = anet(jax_input, inference=True)
+anet = alexnet(with_weights=True, dtype=jnp.float16)
+print(anet.conv2.weight.dtype)
+jax_output = anet(jnp.array(jax_input, dtype=jnp.float16), inference=True)
 jax_probs = jax.nn.softmax(jax_output)
 
 # Get top predictions

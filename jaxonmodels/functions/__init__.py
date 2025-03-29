@@ -12,7 +12,7 @@ from .text import (
     SimpleTokenizer,
     clip_tokenize,
 )
-from .utils import make_divisible, make_ntuple
+from .utils import default_floating_dtype, dtype_to_str, make_divisible, make_ntuple
 
 __all__ = [
     "multi_head_attention_forward",
@@ -27,4 +27,6 @@ __all__ = [
     "clip_tokenize",
     "make_divisible",
     "make_ntuple",
+    "default_floating_dtype",
+    "dtype_to_str",
 ]

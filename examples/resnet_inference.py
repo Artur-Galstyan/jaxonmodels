@@ -45,7 +45,10 @@ def main():
     # Load model with pre-trained weights
     # r, s = resnet18(weights="resnet18_IMAGENET1K_V1", key=jax.random.key(0))
     r, s = load_resnet(
-        model="resnet50", weights="resnet50_IMAGENET1K_V2", key=jax.random.key(0)
+        model="resnet50",
+        weights="resnet50_IMAGENET1K_V2",
+        key=jax.random.key(0),
+        dtype=jnp.float16,
     )
     # Set model to inference mode for batch normalization
     r = ft.partial(r, inference=True)
@@ -57,7 +60,7 @@ def main():
     # Run inference
     jax_output, _ = eqx.filter_vmap(
         r, in_axes=(0, None), out_axes=(0, None), axis_name="batch"
-    )(jax_input, s)
+    )(jnp.array(jax_input, dtype=jnp.float16), s)
 
     print(f"Output shape: {jax_output.shape}")
 

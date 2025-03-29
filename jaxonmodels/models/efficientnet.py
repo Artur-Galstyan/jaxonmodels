@@ -13,9 +13,11 @@ from beartype.typing import Any, Callable, Literal, Sequence
 from jaxtyping import Array, Float, PRNGKeyArray
 
 from jaxonmodels.functions import (
+    default_floating_dtype,
     make_divisible,
     make_ntuple,
 )
+from jaxonmodels.functions.utils import dtype_to_str
 from jaxonmodels.layers import BatchNorm, SqueezeExcitation, StochasticDepth
 from jaxonmodels.statedict2pytree.s2p import (
     convert,
@@ -129,10 +131,10 @@ class Conv2dNormActivation(eqx.Module):
         activation_layer: Callable[..., Array] | None = jax.nn.relu,
         dilation: int | Sequence[int] = 1,
         use_bias: bool | None = None,
-        dtype=None,
         axis_name: str = "batch",
         *,
         key: PRNGKeyArray,
+        dtype: Any,
     ):
         if padding is None:
             if isinstance(kernel_size, int) and isinstance(dilation, int):
@@ -166,8 +168,12 @@ class Conv2dNormActivation(eqx.Module):
             key=subkey,
         )
 
+        self.norm = None
         if norm_layer is not None:
-            self.norm = norm_layer(out_channels, axis_name=axis_name)
+            if norm_layer is BatchNorm:
+                self.norm = norm_layer(out_channels, axis_name=axis_name, dtype=dtype)
+            else:
+                self.norm = norm_layer(out_channels, axis_name=axis_name, dtype=dtype)
 
         if activation_layer is not None:
             self.activation = eqx.nn.Lambda(activation_layer)
@@ -204,9 +210,10 @@ class MBConv(eqx.Module):
 
     def __init__(
         self,
-        cnf,
+        cnf: MBConvConfig,
         stochastic_depth_prob: float,
         key: PRNGKeyArray,
+        dtype: Any,
     ):
         if not (1 <= cnf.stride <= 2):
             raise ValueError("illegal stride value")
@@ -219,6 +226,7 @@ class MBConv(eqx.Module):
 
         # expand
         expanded_channels = cnf.adjust_channels(cnf.input_channels, cnf.expand_ratio)
+        self.expand_conv2d = None
         if expanded_channels != cnf.input_channels:
             key, subkey = jax.random.split(key)
             self.expand_conv2d = Conv2dNormActivation(
@@ -228,9 +236,8 @@ class MBConv(eqx.Module):
                 norm_layer=BatchNorm,
                 activation_layer=activation_layer,
                 key=subkey,
+                dtype=dtype,
             )
-        else:
-            self.expand_conv2d = None
 
         # depthwise
         key, subkey = jax.random.split(key)
@@ -243,12 +250,13 @@ class MBConv(eqx.Module):
             norm_layer=BatchNorm,
             activation_layer=activation_layer,
             key=subkey,
+            dtype=dtype,
         )
         squeeze_channels = max(1, cnf.input_channels // 4)
 
         key, subkey = jax.random.split(key)
         self.se_layer = SqueezeExcitation(
-            expanded_channels, squeeze_channels, key=subkey
+            expanded_channels, squeeze_channels, key=subkey, dtype=dtype
         )
 
         # project
@@ -260,12 +268,13 @@ class MBConv(eqx.Module):
             norm_layer=BatchNorm,
             activation_layer=None,
             key=subkey,
+            dtype=dtype,
         )
         self.stochastic_depth = StochasticDepth(stochastic_depth_prob, "row")
 
     def __call__(
         self, x: Array, state: eqx.nn.State, inference: bool, key: PRNGKeyArray
-    ):
+    ) -> tuple[Array, eqx.nn.State]:
         if self.expand_conv2d:
             result, state = self.expand_conv2d(x, state, inference)
         else:
@@ -290,9 +299,10 @@ class FusedMBConv(eqx.Module):
 
     def __init__(
         self,
-        cnf,
+        cnf: FusedMBConvConfig,
         stochastic_depth_prob: float,
         key: PRNGKeyArray,
+        dtype: Any,
     ):
         if not (1 <= cnf.stride <= 2):
             raise ValueError("illegal stride value")
@@ -302,6 +312,7 @@ class FusedMBConv(eqx.Module):
         )
 
         expanded_channels = cnf.adjust_channels(cnf.input_channels, cnf.expand_ratio)
+        self.project = None
         if expanded_channels != cnf.input_channels:
             # fused expand
             key, subkey, subkey2 = jax.random.split(key, 3)
@@ -313,6 +324,7 @@ class FusedMBConv(eqx.Module):
                 norm_layer=BatchNorm,
                 activation_layer=jax.nn.silu,
                 key=subkey,
+                dtype=dtype,
             )
 
             # project
@@ -323,6 +335,7 @@ class FusedMBConv(eqx.Module):
                 norm_layer=BatchNorm,
                 activation_layer=None,
                 key=subkey2,
+                dtype=dtype,
             )
         else:
             key, subkey = jax.random.split(key)
@@ -334,6 +347,7 @@ class FusedMBConv(eqx.Module):
                 norm_layer=BatchNorm,
                 activation_layer=jax.nn.silu,
                 key=subkey,
+                dtype=dtype,
             )
             self.project = None
 
@@ -362,9 +376,9 @@ class InvertedResidualBlock(eqx.Module):
     def __call__(
         self, x: Array, state: eqx.nn.State, inference: bool, key: PRNGKeyArray
     ) -> tuple[Array, eqx.nn.State]:
-        for stage in self.layers:
-            key, subkey = jax.random.split(key)
-            x, state = stage(x, state, inference, subkey)
+        keys = jax.random.split(key, len(self.layers) + 1)
+        for i, stage in enumerate(self.layers):
+            x, state = stage(x, state, inference, keys[i])
 
         return x, state
 
@@ -374,15 +388,20 @@ class Classifier(eqx.Module):
     linear: eqx.nn.Linear
 
     def __init__(
-        self, p: float, in_features: int, out_features: int, key: PRNGKeyArray
+        self,
+        p: float,
+        in_features: int,
+        out_features: int,
+        key: PRNGKeyArray,
+        dtype: Any,
     ):
         self.dropout = eqx.nn.Dropout(p=p)
-        self.linear = eqx.nn.Linear(in_features, out_features, key=key)
+
+        self.linear = eqx.nn.Linear(in_features, out_features, key=key, dtype=dtype)
 
     def __call__(self, x: Array, inference: bool, key: PRNGKeyArray) -> Array:
         x = self.dropout(x, inference=inference, key=key)
         x = self.linear(x)
-
         return x
 
 
@@ -400,7 +419,13 @@ class EfficientNet(eqx.Module):
         last_channel: int | None = None,
         *,
         key: PRNGKeyArray,
+        dtype: Any | None = None,  # Added optional dtype parameter
     ):
+        # Determine default dtype if not provided
+        if dtype is None:
+            dtype = default_floating_dtype()
+        assert dtype is not None
+
         if not inverted_residual_setting:
             raise ValueError("The inverted_residual_setting should not be empty")
         elif not (
@@ -409,6 +434,7 @@ class EfficientNet(eqx.Module):
         ):
             raise TypeError(
                 "The inverted_residual_setting should be List[MBConvConfig]"
+                " or List[FusedMBConvConfig]"
             )
 
         key, *subkeys = jax.random.split(key, 10)
@@ -424,6 +450,7 @@ class EfficientNet(eqx.Module):
                 norm_layer=BatchNorm,
                 activation_layer=jax.nn.silu,
                 key=subkeys[0],
+                dtype=dtype,
             )
         )
 
@@ -432,7 +459,10 @@ class EfficientNet(eqx.Module):
         stage_block_id = 0
         for cnf in inverted_residual_setting:
             stage: list[MBConv | FusedMBConv] = []
-            for _ in range(cnf.num_layers):
+            num_layers = cnf.num_layers
+            stage_keys = jax.random.split(key, num_layers + 1)
+            key = stage_keys[0]
+            for i in range(num_layers):
                 block_cnf = copy.copy(cnf)
 
                 if stage:
@@ -442,8 +472,9 @@ class EfficientNet(eqx.Module):
                 sd_prob = (
                     stochastic_depth_prob * float(stage_block_id) / total_stage_blocks
                 )
-                key, subkey = jax.random.split(key)
-                stage.append(block_cnf.block(block_cnf, sd_prob, subkey))
+                stage.append(
+                    block_cnf.block(block_cnf, sd_prob, stage_keys[i], dtype=dtype)
+                )
                 stage_block_id += 1
 
             self.features.append(InvertedResidualBlock(stage))
@@ -453,7 +484,7 @@ class EfficientNet(eqx.Module):
         lastconv_output_channels = (
             last_channel if last_channel is not None else 4 * lastconv_input_channels
         )
-        key, subkey = jax.random.split(key)
+        key, subkey1, subkey2 = jax.random.split(key, 3)
         self.features.append(
             Conv2dNormActivation(
                 lastconv_input_channels,
@@ -461,29 +492,36 @@ class EfficientNet(eqx.Module):
                 kernel_size=1,
                 norm_layer=BatchNorm,
                 activation_layer=jax.nn.silu,
-                key=subkey,
+                key=subkey1,
+                dtype=dtype,
             )
         )
 
         self.avgpool = eqx.nn.AdaptiveAvgPool2d(1)
-        key, subkey = jax.random.split(key)
         self.classifier = Classifier(
-            dropout, lastconv_output_channels, n_classes, subkey
+            dropout,
+            lastconv_output_channels,
+            n_classes,
+            subkey2,
+            dtype=dtype,
         )
-        # todo: kaiming init
+        # TODO: kaiming init
 
     def __call__(
         self, x: Array, state: eqx.nn.State, inference: bool, key: PRNGKeyArray
     ) -> tuple[Array, eqx.nn.State]:
-        for feature in self.features:
-            key, subkey = jax.random.split(key)
-            x, state = feature(x, state, inference, key)
+        num_feature_layers = len(self.features)
+        keys = jax.random.split(key, num_feature_layers + 2)
+        feature_keys = keys[:num_feature_layers]
+        classifier_key = keys[-1]
+
+        for i, feature in enumerate(self.features):
+            x, state = feature(x, state, inference, feature_keys[i])
 
         x = self.avgpool(x)
         x = jnp.ravel(x)
 
-        key, subkey = jax.random.split(key)
-        x = self.classifier(x, inference, key)
+        x = self.classifier(x, inference, classifier_key)
 
         return x, state
 
@@ -494,6 +532,7 @@ def _efficientnet(
     last_channel: int | None,
     n_classes: int,
     key: PRNGKeyArray,
+    dtype: Any,
 ) -> tuple[EfficientNet, eqx.nn.State]:
     model, state = eqx.nn.make_with_state(EfficientNet)(
         inverted_residual_setting,
@@ -501,6 +540,7 @@ def _efficientnet(
         last_channel=last_channel,
         n_classes=n_classes,
         key=key,
+        dtype=dtype,
     )
 
     return model, state
@@ -569,9 +609,11 @@ def _with_weights(
     pytree,
     weights: str,
     cache: bool,
+    dtype: Any,
 ):
     """Load pre-trained weights for the model"""
     efficientnet, state = pytree
+    dtype_str = dtype_to_str(dtype)
 
     weights_url = _MODELS.get(weights)
     if weights_url is None:
@@ -581,11 +623,15 @@ def _with_weights(
     jaxonmodels_dir = os.path.expanduser("~/.jaxonmodels/models")
     os.makedirs(jaxonmodels_dir, exist_ok=True)
 
+    # Define cache file path including dtype
+    cache_filename = f"{weights}-{dtype_str}.eqx"
+    cache_filepath = str(Path(jaxonmodels_dir) / cache_filename)
+
     # Check if cached model exists
     if cache:
-        if os.path.exists(str(Path(jaxonmodels_dir) / f"{weights}.eqx")):
+        if os.path.exists(cache_filepath):
             return eqx.tree_deserialise_leaves(
-                str(Path(jaxonmodels_dir) / f"{weights}.eqx"),
+                cache_filepath,
                 (efficientnet, state),
             )
 
@@ -595,134 +641,207 @@ def _with_weights(
     filename = weights_url.split("/")[-1]
     weights_file = os.path.join(weights_dir, filename)
     if not os.path.exists(weights_file):
+        print(f"Downloading weights from {weights_url} to {weights_file}")
         urlretrieve(weights_url, weights_file)
+    else:
+        print(f"Using existing weights file: {weights_file}")
 
     # Load PyTorch weights
     import torch
 
+    print("Loading PyTorch state dict...")
     weights_dict = torch.load(
-        weights_file, map_location=torch.device("cpu"), weights_only=True
+        weights_file,
+        map_location=torch.device("cpu"),  # weights_only=True removed for compatibility
     )
+    # If it's a checkpoint dict, extract the state_dict
+    if not isinstance(weights_dict, dict):
+        # Try loading as a JIT model like in CLIP if simple load fails
+        try:
+            torch_model = torch.jit.load(weights_file, map_location=torch.device("cpu"))
+            temp_dict = {}
+            for name, param in torch_model.named_parameters():
+                temp_dict[name] = param.clone().detach()
+            for name, buffer in torch_model.named_buffers():
+                temp_dict[name] = buffer.clone().detach()
+            # EfficientNet doesn't have logit_scale like CLIP
+            weights_dict = temp_dict
+            print("Loaded weights from TorchScript model.")
+        except Exception as e:
+            raise TypeError(
+                f"Could not load weights. "
+                f"Expected state_dict but got {type(weights_dict)}. "
+                f"JIT load failed with: {e}"
+            )
+    elif "state_dict" in weights_dict:
+        weights_dict = weights_dict["state_dict"]
 
+    print("Converting PyTorch weights to JAX format...")
     # Convert PyTorch weights to JAX format
     torchfields = state_dict_to_fields(weights_dict)
     torchfields = move_running_fields_to_the_end(torchfields)
     jaxfields, state_indices = pytree_to_fields((efficientnet, state))
 
     efficientnet, state = convert(
-        weights_dict, (efficientnet, state), jaxfields, state_indices, torchfields
+        weights_dict,
+        (efficientnet, state),
+        jaxfields,
+        state_indices,
+        torchfields,
+        dtype=dtype,
     )
 
-    # Cache the model if requested
     if cache:
-        serialize_pytree(
-            (efficientnet, state), str(Path(jaxonmodels_dir) / f"{weights}.eqx")
-        )
+        serialize_pytree((efficientnet, state), cache_filepath)
 
     return efficientnet, state
 
 
-def _efficientnet_b0(key, n_classes=1000):
-    """Create EfficientNet B0 model with random initialization"""
+def _efficientnet_b0(key, n_classes=1000, dtype: Any = None):
     inverted_residual_setting, last_channel = _efficientnet_conf(
         "efficientnet_b0", width_mult=1.0, depth_mult=1.0
     )
     return _efficientnet(
-        inverted_residual_setting, 0.2, last_channel, n_classes=n_classes, key=key
+        inverted_residual_setting,
+        0.2,
+        last_channel,
+        n_classes=n_classes,
+        key=key,
+        dtype=dtype,
     )
 
 
-def _efficientnet_b1(key, n_classes=1000):
-    """Create EfficientNet B1 model with random initialization"""
+def _efficientnet_b1(key, n_classes=1000, dtype: Any = None):
     inverted_residual_setting, last_channel = _efficientnet_conf(
         "efficientnet_b1", width_mult=1.0, depth_mult=1.1
     )
     return _efficientnet(
-        inverted_residual_setting, 0.2, last_channel, n_classes=n_classes, key=key
+        inverted_residual_setting,
+        0.2,
+        last_channel,
+        n_classes=n_classes,
+        key=key,
+        dtype=dtype,
     )
 
 
-def _efficientnet_b2(key, n_classes=1000):
-    """Create EfficientNet B2 model with random initialization"""
+def _efficientnet_b2(key, n_classes=1000, dtype: Any = None):
     inverted_residual_setting, last_channel = _efficientnet_conf(
         "efficientnet_b2", width_mult=1.1, depth_mult=1.2
     )
     return _efficientnet(
-        inverted_residual_setting, 0.3, last_channel, n_classes=n_classes, key=key
+        inverted_residual_setting,
+        0.3,
+        last_channel,
+        n_classes=n_classes,
+        key=key,
+        dtype=dtype,
     )
 
 
-def _efficientnet_b3(key, n_classes=1000):
-    """Create EfficientNet B3 model with random initialization"""
+def _efficientnet_b3(key, n_classes=1000, dtype: Any = None):
     inverted_residual_setting, last_channel = _efficientnet_conf(
         "efficientnet_b3", width_mult=1.2, depth_mult=1.4
     )
     return _efficientnet(
-        inverted_residual_setting, 0.3, last_channel, n_classes=n_classes, key=key
+        inverted_residual_setting,
+        0.3,
+        last_channel,
+        n_classes=n_classes,
+        key=key,
+        dtype=dtype,
     )
 
 
-def _efficientnet_b4(key, n_classes=1000):
-    """Create EfficientNet B4 model with random initialization"""
+def _efficientnet_b4(key, n_classes=1000, dtype: Any = None):
     inverted_residual_setting, last_channel = _efficientnet_conf(
         "efficientnet_b4", width_mult=1.4, depth_mult=1.8
     )
     return _efficientnet(
-        inverted_residual_setting, 0.4, last_channel, n_classes=n_classes, key=key
+        inverted_residual_setting,
+        0.4,
+        last_channel,
+        n_classes=n_classes,
+        key=key,
+        dtype=dtype,
     )
 
 
-def _efficientnet_b5(key, n_classes=1000):
-    """Create EfficientNet B5 model with random initialization"""
+def _efficientnet_b5(key, n_classes=1000, dtype: Any = None):
     inverted_residual_setting, last_channel = _efficientnet_conf(
         "efficientnet_b5", width_mult=1.6, depth_mult=2.2
     )
     return _efficientnet(
-        inverted_residual_setting, 0.4, last_channel, n_classes=n_classes, key=key
+        inverted_residual_setting,
+        0.4,
+        last_channel,
+        n_classes=n_classes,
+        key=key,
+        dtype=dtype,
     )
 
 
-def _efficientnet_b6(key, n_classes=1000):
-    """Create EfficientNet B6 model with random initialization"""
+def _efficientnet_b6(key, n_classes=1000, dtype: Any = None):
     inverted_residual_setting, last_channel = _efficientnet_conf(
         "efficientnet_b6", width_mult=1.8, depth_mult=2.6
     )
     return _efficientnet(
-        inverted_residual_setting, 0.5, last_channel, n_classes=n_classes, key=key
+        inverted_residual_setting,
+        0.5,
+        last_channel,
+        n_classes=n_classes,
+        key=key,
+        dtype=dtype,
     )
 
 
-def _efficientnet_b7(key, n_classes=1000):
-    """Create EfficientNet B7 model with random initialization"""
+def _efficientnet_b7(key, n_classes=1000, dtype: Any = None):
     inverted_residual_setting, last_channel = _efficientnet_conf(
         "efficientnet_b7", width_mult=2.0, depth_mult=3.1
     )
     return _efficientnet(
-        inverted_residual_setting, 0.5, last_channel, n_classes=n_classes, key=key
+        inverted_residual_setting,
+        0.5,
+        last_channel,
+        n_classes=n_classes,
+        key=key,
+        dtype=dtype,
     )
 
 
-def _efficientnet_v2_s(key, n_classes=1000):
-    """Create EfficientNet V2 Small model with random initialization"""
+def _efficientnet_v2_s(key, n_classes=1000, dtype: Any = None):
     inverted_residual_setting, last_channel = _efficientnet_conf("efficientnet_v2_s")
     return _efficientnet(
-        inverted_residual_setting, 0.2, last_channel, n_classes=n_classes, key=key
+        inverted_residual_setting,
+        0.2,
+        last_channel,
+        n_classes=n_classes,
+        key=key,
+        dtype=dtype,
     )
 
 
-def _efficientnet_v2_m(key, n_classes=1000):
-    """Create EfficientNet V2 Medium model with random initialization"""
+def _efficientnet_v2_m(key, n_classes=1000, dtype: Any = None):
     inverted_residual_setting, last_channel = _efficientnet_conf("efficientnet_v2_m")
     return _efficientnet(
-        inverted_residual_setting, 0.3, last_channel, n_classes=n_classes, key=key
+        inverted_residual_setting,
+        0.3,
+        last_channel,
+        n_classes=n_classes,
+        key=key,
+        dtype=dtype,
     )
 
 
-def _efficientnet_v2_l(key, n_classes=1000):
-    """Create EfficientNet V2 Large model with random initialization"""
+def _efficientnet_v2_l(key, n_classes=1000, dtype: Any = None):
     inverted_residual_setting, last_channel = _efficientnet_conf("efficientnet_v2_l")
     return _efficientnet(
-        inverted_residual_setting, 0.4, last_channel, n_classes=n_classes, key=key
+        inverted_residual_setting,
+        0.4,
+        last_channel,
+        n_classes=n_classes,
+        key=key,
+        dtype=dtype,
     )
 
 
@@ -799,6 +918,7 @@ def load_efficientnet(
     cache: bool = True,
     *,
     key: PRNGKeyArray | None = None,
+    dtype: Any | None = None,  # Added optional dtype parameter
 ) -> tuple[EfficientNet, eqx.nn.State]:
     """
     Load an EfficientNet model with optional pre-trained weights.
@@ -807,8 +927,10 @@ def load_efficientnet(
         model: The name of the EfficientNet model to load
         weights: The name of the weights to load (from _MODELS), or None for random init
         n_classes: Number of output classes
-        cache: Whether to cache the model
-        key: Random key for initialization
+        cache: Whether to cache the model and weights.
+        key: Random key for initialization. Defaults to jax.random.key(42).
+        dtype: The data type for the model's parameters (e.g., jnp.float32).
+               Defaults to jaxonmodels.functions.default_floating_dtype().
 
     Returns:
         A tuple of (model, state)
@@ -816,35 +938,44 @@ def load_efficientnet(
     if key is None:
         key = jax.random.key(42)
 
+    # Determine default dtype if not provided before passing to constructors
+    if dtype is None:
+        dtype = default_floating_dtype()
+    assert dtype is not None  # Ensure dtype is set
+
+    efficientnet, state = None, None  # Initialize
+
     match model:
         case "efficientnet_b0":
-            efficientnet, state = _efficientnet_b0(key, n_classes)
+            efficientnet, state = _efficientnet_b0(key, n_classes, dtype=dtype)
         case "efficientnet_b1":
-            efficientnet, state = _efficientnet_b1(key, n_classes)
+            efficientnet, state = _efficientnet_b1(key, n_classes, dtype=dtype)
         case "efficientnet_b2":
-            efficientnet, state = _efficientnet_b2(key, n_classes)
+            efficientnet, state = _efficientnet_b2(key, n_classes, dtype=dtype)
         case "efficientnet_b3":
-            efficientnet, state = _efficientnet_b3(key, n_classes)
+            efficientnet, state = _efficientnet_b3(key, n_classes, dtype=dtype)
         case "efficientnet_b4":
-            efficientnet, state = _efficientnet_b4(key, n_classes)
+            efficientnet, state = _efficientnet_b4(key, n_classes, dtype=dtype)
         case "efficientnet_b5":
-            efficientnet, state = _efficientnet_b5(key, n_classes)
+            efficientnet, state = _efficientnet_b5(key, n_classes, dtype=dtype)
         case "efficientnet_b6":
-            efficientnet, state = _efficientnet_b6(key, n_classes)
+            efficientnet, state = _efficientnet_b6(key, n_classes, dtype=dtype)
         case "efficientnet_b7":
-            efficientnet, state = _efficientnet_b7(key, n_classes)
+            efficientnet, state = _efficientnet_b7(key, n_classes, dtype=dtype)
         case "efficientnet_v2_s":
-            efficientnet, state = _efficientnet_v2_s(key, n_classes)
+            efficientnet, state = _efficientnet_v2_s(key, n_classes, dtype=dtype)
         case "efficientnet_v2_m":
-            efficientnet, state = _efficientnet_v2_m(key, n_classes)
+            efficientnet, state = _efficientnet_v2_m(key, n_classes, dtype=dtype)
         case "efficientnet_v2_l":
-            efficientnet, state = _efficientnet_v2_l(key, n_classes)
+            efficientnet, state = _efficientnet_v2_l(key, n_classes, dtype=dtype)
         case _:
             raise ValueError(f"Unknown model name: {model}")
 
     if weights:
         _assert_model_and_weights_fit(model, weights)
-        efficientnet, state = _with_weights((efficientnet, state), weights, cache)
+        efficientnet, state = _with_weights(
+            (efficientnet, state), weights, cache, dtype=dtype
+        )
 
     assert efficientnet is not None
     assert state is not None

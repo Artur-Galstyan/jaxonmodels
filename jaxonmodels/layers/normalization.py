@@ -1,9 +1,11 @@
 import equinox as eqx
 import jax
 import jax.numpy as jnp
-from beartype.typing import Hashable, Sequence
+from beartype.typing import Any, Hashable, Sequence
 from equinox.nn import State
 from jaxtyping import Array, Float, PRNGKeyArray
+
+from jaxonmodels.functions.utils import default_floating_dtype
 
 
 class BatchNorm(eqx.nn.StatefulLayer):
@@ -28,7 +30,11 @@ class BatchNorm(eqx.nn.StatefulLayer):
         momentum: float = 0.1,
         affine: bool = True,
         inference: bool = False,
+        dtype: Any | None = None,
     ):
+        if dtype is None:
+            dtype = default_floating_dtype()
+        assert dtype is not None
         self.size = size
         self.eps = eps
         self.momentum = momentum
@@ -36,10 +42,12 @@ class BatchNorm(eqx.nn.StatefulLayer):
         self.inference = inference
         self.axis_name = axis_name
 
-        self.gamma = jnp.ones(self.size) if self.affine else None
-        self.beta = jnp.zeros(self.size) if self.affine else None
+        self.gamma = jnp.ones(self.size, dtype=dtype) if self.affine else None
+        self.beta = jnp.zeros(self.size, dtype=dtype) if self.affine else None
 
-        self.state_index = eqx.nn.StateIndex((jnp.zeros(size), jnp.ones(size)))
+        self.state_index = eqx.nn.StateIndex(
+            (jnp.zeros(size, dtype=dtype), jnp.ones(size, dtype=dtype))
+        )
 
     def __call__(
         self,

@@ -13,6 +13,8 @@ from jaxtyping import Array, PyTree
 from pydantic import BaseModel
 from tqdm import tqdm
 
+from jaxonmodels.functions.utils import default_floating_dtype
+
 
 class ChunkifiedPytreePath(BaseModel):
     path: str
@@ -196,15 +198,18 @@ def convert(
     jaxfields: list[JaxField],
     state_indices: dict | None,
     torchfields: list[TorchField],
-    dtype: Any = np.float32,  # todo: support different dtypes
+    dtype: Any | None = None,
 ) -> PyTree:
+    if dtype is None:
+        dtype = default_floating_dtype()
+    assert dtype is not None
     state_dict_np: dict[str, np.ndarray] = {
         k: state_dict[k].detach().numpy() for k in state_dict
     }
 
     for k in state_dict_np:
         if np.issubdtype(state_dict_np[k].dtype, np.floating):
-            state_dict_np[k] = state_dict_np[k].astype(np.float32)
+            state_dict_np[k] = state_dict_np[k].astype(dtype)
 
     if len(torchfields) != len(jaxfields):
         raise ValueError(

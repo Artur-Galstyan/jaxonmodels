@@ -12,8 +12,7 @@ from jaxonmodels.models.efficientnet import load_efficientnet
 
 def main():
     model, state = load_efficientnet(
-        "efficientnet_b0",
-        weights="efficientnet_b0_IMAGENET1K_V1",
+        "efficientnet_b0", weights="efficientnet_b0_IMAGENET1K_V1", dtype=jnp.float16
     )
 
     img_path = "cat.jpg"
@@ -32,7 +31,7 @@ def main():
     input_tensor = preprocess(img)
     input_batch = input_tensor.unsqueeze(0)  # pyright: ignore Add batch dimension pyright: ignore
 
-    input_batch = jnp.array(input_batch.numpy())
+    input_batch = jnp.array(input_batch.numpy(), dtype=jnp.float16)
     print(f"{input_batch.shape=}")
     key, subkey = jax.random.split(key)
     model_pt = functools.partial(model, inference=True, key=subkey)

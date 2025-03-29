@@ -1,13 +1,14 @@
 import equinox as eqx
 import jax
 import jax.numpy as jnp
-from beartype.typing import Callable
+from beartype.typing import Any, Callable
 from jaxtyping import Array, PRNGKeyArray
 
 from jaxonmodels.functions import (
     canonical_mask,
     multi_head_attention_forward,
 )
+from jaxonmodels.functions.utils import default_floating_dtype
 
 
 class MultiheadAttention(eqx.Module):
@@ -43,10 +44,13 @@ class MultiheadAttention(eqx.Module):
         add_zero_attn=False,
         kdim=None,
         vdim=None,
-        dtype=None,
         *,
         key: PRNGKeyArray,
+        dtype: Any | None = None,
     ) -> None:
+        if dtype is None:
+            dtype = default_floating_dtype()
+        assert dtype is not None
         if embed_dim <= 0 or num_heads <= 0:
             raise ValueError(
                 f"embed_dim and num_heads must be greater than 0,"
@@ -63,7 +67,7 @@ class MultiheadAttention(eqx.Module):
         assert self.head_dim * num_heads == self.embed_dim, (
             "embed_dim must be divisible by num_heads"
         )
-        uniform_initializer = jax.nn.initializers.uniform()
+        uniform_initializer = jax.nn.initializers.uniform(dtype=dtype)
 
         if not self._qkv_same_embed_dim:
             key, *subkeys = jax.random.split(key, 4)
@@ -87,21 +91,23 @@ class MultiheadAttention(eqx.Module):
             )
 
         if bias:
-            self.in_proj_bias = jnp.empty((3 * embed_dim))
+            self.in_proj_bias = jnp.empty((3 * embed_dim), dtype=dtype)
         else:
             self.in_proj_bias = None
         key, subkey = jax.random.split(key)
-        out_proj = eqx.nn.Linear(embed_dim, embed_dim, use_bias=bias, key=subkey)
+        out_proj = eqx.nn.Linear(
+            embed_dim, embed_dim, use_bias=bias, key=subkey, dtype=dtype
+        )
         if bias:
             assert out_proj.bias is not None
-            new_bias = jnp.zeros_like(out_proj.bias)
+            new_bias = jnp.zeros_like(out_proj.bias, dtype=dtype)
             where = lambda l: l.bias
             self.out_proj = eqx.tree_at(where, out_proj, new_bias)
         else:
             self.out_proj = out_proj
 
         if add_bias_kv:
-            normal_initializer = jax.nn.initializers.normal()
+            normal_initializer = jax.nn.initializers.normal(dtype=dtype)
             key, *subkeys = jax.random.split(key, 3)
             self.bias_k = normal_initializer(key=subkeys[0], shape=(1, embed_dim))
             self.bias_v = normal_initializer(key=subkeys[0], shape=(1, embed_dim))
@@ -195,12 +201,24 @@ class SqueezeExcitation(eqx.Module):
     fc2: eqx.nn.Conv2d
 
     def __init__(
-        self, input_channels: int, squeeze_channels: int, *, key: PRNGKeyArray
+        self,
+        input_channels: int,
+        squeeze_channels: int,
+        *,
+        key: PRNGKeyArray,
+        dtype: Any | None = None,
     ) -> None:
+        if dtype is None:
+            dtype = default_floating_dtype()
+        assert dtype is not None
         self.avgpool = eqx.nn.AdaptiveAvgPool2d(1)
         key, subkey = jax.random.split(key)
-        self.fc1 = eqx.nn.Conv2d(input_channels, squeeze_channels, 1, key=key)
-        self.fc2 = eqx.nn.Conv2d(squeeze_channels, input_channels, 1, key=subkey)
+        self.fc1 = eqx.nn.Conv2d(
+            input_channels, squeeze_channels, 1, key=key, dtype=dtype
+        )
+        self.fc2 = eqx.nn.Conv2d(
+            squeeze_channels, input_channels, 1, key=subkey, dtype=dtype
+        )
 
     def __call__(
         self,

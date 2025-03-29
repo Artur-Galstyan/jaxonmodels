@@ -1,8 +1,10 @@
 import equinox as eqx
 import jax
 import jax.numpy as jnp
+from beartype.typing import Any
 from jaxtyping import Array, Float, PRNGKeyArray
 
+from jaxonmodels.functions.utils import default_floating_dtype
 from jaxonmodels.layers import MultiheadAttention
 
 
@@ -13,19 +15,13 @@ class ResidualAttentionBlock(eqx.Module):
     c_proj: eqx.nn.Linear
     ln_2: eqx.nn.LayerNorm
 
-    def __init__(
-        self,
-        d_model: int,
-        n_head: int,
-        *,
-        key: PRNGKeyArray,
-    ):
+    def __init__(self, d_model: int, n_head: int, *, key: PRNGKeyArray, dtype: Any):
         key, *subkeys = jax.random.split(key, 5)
-        self.attn = MultiheadAttention(d_model, n_head, key=subkeys[0])
-        self.ln_1 = eqx.nn.LayerNorm(d_model)
-        self.c_fc = eqx.nn.Linear(d_model, d_model * 4, key=subkeys[1])
-        self.c_proj = eqx.nn.Linear(d_model * 4, d_model, key=subkeys[2])
-        self.ln_2 = eqx.nn.LayerNorm(d_model)
+        self.attn = MultiheadAttention(d_model, n_head, key=subkeys[0], dtype=dtype)
+        self.ln_1 = eqx.nn.LayerNorm(d_model, dtype=dtype)
+        self.c_fc = eqx.nn.Linear(d_model, d_model * 4, key=subkeys[1], dtype=dtype)
+        self.c_proj = eqx.nn.Linear(d_model * 4, d_model, key=subkeys[2], dtype=dtype)
+        self.ln_2 = eqx.nn.LayerNorm(d_model, dtype=dtype)
 
     def _attention(self, x: Array, attn_mask: Array | None = None):
         return self.attn(x, x, x, need_weights=False, attn_mask=attn_mask)[0]
@@ -45,10 +41,13 @@ class ResidualAttentionBlock(eqx.Module):
 class Transformer(eqx.Module):
     resblocks: list[ResidualAttentionBlock]
 
-    def __init__(self, width: int, layers: int, heads: int, *, key: PRNGKeyArray):
+    def __init__(
+        self, width: int, layers: int, heads: int, *, key: PRNGKeyArray, dtype: Any
+    ):
         key, *subkeys = jax.random.split(key, layers + 1)
         self.resblocks = [
-            ResidualAttentionBlock(width, heads, key=subkeys[i]) for i in range(layers)
+            ResidualAttentionBlock(width, heads, key=subkeys[i], dtype=dtype)
+            for i in range(layers)
         ]
 
     def __call__(
@@ -79,7 +78,11 @@ class VisionTransformer(eqx.Module):
         output_dim: int,
         *,
         key: PRNGKeyArray,
+        dtype: Any | None = None,
     ):
+        if dtype is None:
+            dtype = default_floating_dtype()
+        assert dtype is not None
         key, *subkeys = jax.random.split(key, 6)
         self.conv1 = eqx.nn.Conv2d(
             in_channels=3,
@@ -91,17 +94,23 @@ class VisionTransformer(eqx.Module):
         )
 
         scale = width**-0.5
-        self.class_embedding = jax.random.normal(subkeys[1], (width,)) * scale
+        self.class_embedding = (
+            jax.random.normal(subkeys[1], (width,), dtype=dtype) * scale
+        )
         self.positional_embedding = scale * jax.random.normal(
-            subkeys[2], ((input_resolution // patch_size) ** 2 + 1, width)
+            subkeys[2], ((input_resolution // patch_size) ** 2 + 1, width), dtype=dtype
         )
 
         self.ln_pre = eqx.nn.LayerNorm(width)
 
-        self.transformer = Transformer(width, layers, heads, key=subkeys[3])
+        self.transformer = Transformer(
+            width, layers, heads, key=subkeys[3], dtype=dtype
+        )
 
-        self.ln_post = eqx.nn.LayerNorm(width)
-        self.proj = scale * jax.random.normal(subkeys[4], (width, output_dim))
+        self.ln_post = eqx.nn.LayerNorm(width, dtype=dtype)
+        self.proj = scale * jax.random.normal(
+            subkeys[4], (width, output_dim), dtype=dtype
+        )
 
     def __call__(
         self,

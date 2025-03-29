@@ -6,9 +6,14 @@ from urllib.request import urlretrieve
 import equinox as eqx
 import jax
 import jax.numpy as jnp
-from beartype.typing import Literal
+from beartype.typing import Any, Literal
 from jaxtyping import Array, Float, PRNGKeyArray
 
+from jaxonmodels.functions import (
+    default_floating_dtype,
+    dtype_to_str,
+    kaiming_init_conv2d,
+)
 from jaxonmodels.layers import BatchNorm
 from jaxonmodels.statedict2pytree.s2p import (
     convert,
@@ -49,6 +54,8 @@ class Downsample(eqx.Module):
         out_channels: int,
         stride: int,
         key: PRNGKeyArray,
+        dtype: Any,
+        axis_name: str,
     ):
         _, subkey = jax.random.split(key)
         self.conv = eqx.nn.Conv2d(
@@ -58,9 +65,10 @@ class Downsample(eqx.Module):
             stride=stride,
             use_bias=False,
             key=subkey,
+            dtype=dtype,
         )
 
-        self.bn = BatchNorm(out_channels, axis_name="batch")
+        self.bn = BatchNorm(out_channels, axis_name=axis_name, dtype=dtype)
 
     def __call__(
         self,
@@ -95,6 +103,8 @@ class BasicBlock(eqx.Module):
         base_width: int,
         dilation: int,
         key: PRNGKeyArray,
+        dtype: Any,
+        axis_name: str,
     ):
         key, *subkeys = jax.random.split(key, 3)
 
@@ -106,8 +116,9 @@ class BasicBlock(eqx.Module):
             padding=1,
             use_bias=False,
             key=subkeys[0],
+            dtype=dtype,
         )
-        self.bn1 = BatchNorm(size=out_channels, axis_name="batch")
+        self.bn1 = BatchNorm(size=out_channels, axis_name=axis_name, dtype=dtype)
 
         self.conv2 = eqx.nn.Conv2d(
             out_channels,
@@ -117,8 +128,9 @@ class BasicBlock(eqx.Module):
             padding=1,
             use_bias=False,
             key=subkeys[1],
+            dtype=dtype,
         )
-        self.bn2 = BatchNorm(size=out_channels, axis_name="batch")
+        self.bn2 = BatchNorm(size=out_channels, axis_name=axis_name, dtype=dtype)
 
         self.downsample = downsample
 
@@ -172,14 +184,21 @@ class Bottleneck(eqx.Module):
         base_width: int,
         dilation: int,
         key: PRNGKeyArray,
+        dtype: Any,
+        axis_name: str,
     ):
         _, *subkeys = jax.random.split(key, 4)
 
         width = int(out_channels * (base_width / 64.0)) * groups
         self.conv1 = eqx.nn.Conv2d(
-            in_channels, width, kernel_size=1, use_bias=False, key=subkeys[0]
+            in_channels,
+            width,
+            kernel_size=1,
+            use_bias=False,
+            key=subkeys[0],
+            dtype=dtype,
         )
-        self.bn1 = BatchNorm(width, axis_name="batch")
+        self.bn1 = BatchNorm(width, axis_name=axis_name, dtype=dtype)
 
         self.conv2 = eqx.nn.Conv2d(
             width,
@@ -191,9 +210,10 @@ class Bottleneck(eqx.Module):
             padding=dilation,
             use_bias=False,
             key=subkeys[1],
+            dtype=dtype,
         )
 
-        self.bn2 = BatchNorm(width, axis_name="batch")
+        self.bn2 = BatchNorm(width, axis_name=axis_name, dtype=dtype)
 
         self.conv3 = eqx.nn.Conv2d(
             width,
@@ -201,9 +221,12 @@ class Bottleneck(eqx.Module):
             kernel_size=1,
             key=subkeys[2],
             use_bias=False,
+            dtype=dtype,
         )
 
-        self.bn3 = BatchNorm(out_channels * self.expansion, axis_name="batch")
+        self.bn3 = BatchNorm(
+            out_channels * self.expansion, axis_name=axis_name, dtype=dtype
+        )
 
         self.downsample = downsample
 
@@ -270,8 +293,13 @@ class ResNet(eqx.Module):
         width_per_group: int,
         replace_stride_with_dilation: list[bool] | None,
         key: PRNGKeyArray,
+        dtype: Any | None = None,
         input_channels: int = 3,
+        axis_name: str = "batch",
     ):
+        if dtype is None:
+            dtype = default_floating_dtype()
+        assert dtype is not None
         key, *subkeys = jax.random.split(key, 10)
 
         if replace_stride_with_dilation is None:
@@ -290,9 +318,12 @@ class ResNet(eqx.Module):
             padding=3,
             use_bias=False,
             key=subkeys[0],
+            dtype=dtype,
         )
 
-        self.bn = BatchNorm(self.running_internal_channels, axis_name="batch")
+        self.bn = BatchNorm(
+            self.running_internal_channels, axis_name=axis_name, dtype=dtype
+        )
         self.mp = eqx.nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
 
         self.layer1 = ResNetBlock(
@@ -305,6 +336,8 @@ class ResNet(eqx.Module):
                 groups=groups,
                 base_width=width_per_group,
                 key=subkeys[1],
+                dtype=dtype,
+                axis_name=axis_name,
             )
         )
         self.layer2 = ResNetBlock(
@@ -317,6 +350,8 @@ class ResNet(eqx.Module):
                 groups=groups,
                 base_width=width_per_group,
                 key=subkeys[2],
+                dtype=dtype,
+                axis_name=axis_name,
             )
         )
         self.layer3 = ResNetBlock(
@@ -329,6 +364,8 @@ class ResNet(eqx.Module):
                 groups=groups,
                 base_width=width_per_group,
                 key=subkeys[3],
+                dtype=dtype,
+                axis_name=axis_name,
             )
         )
         self.layer4 = ResNetBlock(
@@ -341,11 +378,15 @@ class ResNet(eqx.Module):
                 groups=groups,
                 base_width=width_per_group,
                 key=subkeys[4],
+                dtype=dtype,
+                axis_name=axis_name,
             )
         )
 
         self.avg = eqx.nn.AdaptiveAvgPool2d(target_shape=(1, 1))
-        self.fc = eqx.nn.Linear(512 * block.expansion, n_classes, key=subkeys[-1])
+        self.fc = eqx.nn.Linear(
+            512 * block.expansion, n_classes, key=subkeys[-1], dtype=dtype
+        )
 
         if zero_init_residual:
             # todo: init last bn layer with zero weights
@@ -361,6 +402,8 @@ class ResNet(eqx.Module):
         groups: int,
         base_width: int,
         key: PRNGKeyArray,
+        dtype: Any,
+        axis_name: str,
     ) -> list[BasicBlock | Bottleneck]:
         downsample = None
         previous_dilation = self.dilation
@@ -379,6 +422,8 @@ class ResNet(eqx.Module):
                 out_channels * block.expansion,
                 stride,
                 subkey,
+                dtype=dtype,
+                axis_name=axis_name,
             )
         layers = []
 
@@ -393,6 +438,8 @@ class ResNet(eqx.Module):
                 base_width=base_width,
                 dilation=previous_dilation,
                 key=subkey,
+                dtype=dtype,
+                axis_name=axis_name,
             )
         )
 
@@ -410,6 +457,8 @@ class ResNet(eqx.Module):
                     stride=1,
                     downsample=None,
                     key=subkey,
+                    dtype=dtype,
+                    axis_name=axis_name,
                 )
             )
 
@@ -441,82 +490,71 @@ class ResNet(eqx.Module):
         return x, state
 
 
-def _kaiming_init(resnet, state, key):
-    key, subkey = jax.random.split(key)
-
-    initializer = jax.nn.initializers.he_normal()
-    is_conv2d = lambda x: isinstance(x, eqx.nn.Conv2d)
-    get_weights = lambda m: [
-        x.weight for x in jax.tree.leaves(m, is_leaf=is_conv2d) if is_conv2d(x)
-    ]
-    weights = get_weights(resnet)
-    new_weights = [
-        initializer(subkey, weight.shape, jnp.float32)
-        for weight, subkey in zip(weights, jax.random.split(subkey, len(weights)))
-    ]
-    resnet = eqx.tree_at(get_weights, resnet, new_weights)
-
-    return resnet, state
-
-
 def _with_weights(
     pytree,
-    model_name: str,
+    weights_name: str,
     cache: bool,
+    dtype: Any,
 ):
     resnet, state = pytree
-    if model_name is not None:
-        weights_url = _MODELS.get(model_name)
-        if weights_url is None:
-            raise ValueError(f"No model found for {model_name}")
+    dtype_str = dtype_to_str(dtype)
 
-        # Create directories for caching
-        jaxonmodels_dir = os.path.expanduser("~/.jaxonmodels/models")
-        os.makedirs(jaxonmodels_dir, exist_ok=True)
+    weights_url = _MODELS.get(weights_name)
+    if weights_url is None:
+        raise ValueError(f"No weights found for {weights_name}")
 
-        # Check if cached model exists
-        if cache:
-            if os.path.exists(str(Path(jaxonmodels_dir) / f"{model_name}.eqx")):
-                return eqx.tree_deserialise_leaves(
-                    str(Path(jaxonmodels_dir) / f"{model_name}.eqx"),
-                    (resnet, state),
-                )
+    jaxonmodels_dir = os.path.expanduser("~/.jaxonmodels/models")
+    os.makedirs(jaxonmodels_dir, exist_ok=True)
 
-        # Download weights if not already downloaded
-        weights_dir = os.path.expanduser("~/.jaxonmodels/pytorch_weights")
-        os.makedirs(weights_dir, exist_ok=True)
-        filename = weights_url.split("/")[-1]
-        weights_file = os.path.join(weights_dir, filename)
-        if not os.path.exists(weights_file):
-            urlretrieve(weights_url, weights_file)
+    cache_filename = f"{weights_name}-{dtype_str}.eqx"
+    cache_filepath = str(Path(jaxonmodels_dir) / cache_filename)
 
-        # Load PyTorch weights
-        import torch
-
-        weights_dict = torch.load(
-            weights_file, map_location=torch.device("cpu"), weights_only=True
-        )
-
-        # Convert PyTorch weights to JAX format
-        torchfields = state_dict_to_fields(weights_dict)
-        torchfields = move_running_fields_to_the_end(torchfields)
-        jaxfields, state_indices = pytree_to_fields((resnet, state))
-
-        resnet, state = convert(
-            weights_dict, (resnet, state), jaxfields, state_indices, torchfields
-        )
-
-        # Cache the model if requested
-        if cache:
-            serialize_pytree(
-                (resnet, state), str(Path(jaxonmodels_dir) / f"{model_name}.eqx")
+    if cache:
+        if os.path.exists(cache_filepath):
+            return eqx.tree_deserialise_leaves(
+                cache_filepath,
+                (resnet, state),
             )
+
+    weights_dir = os.path.expanduser("~/.jaxonmodels/pytorch_weights")
+    os.makedirs(weights_dir, exist_ok=True)
+    filename = weights_url.split("/")[-1]
+    weights_file = os.path.join(weights_dir, filename)
+    if not os.path.exists(weights_file):
+        print(f"Downloading weights from {weights_url} to {weights_file}")
+        urlretrieve(weights_url, weights_file)
+
+    import torch
+
+    weights_dict = torch.load(weights_file, map_location=torch.device("cpu"))
+    # Handle nested state_dicts if present
+    if isinstance(weights_dict, dict) and "state_dict" in weights_dict:
+        weights_dict = weights_dict["state_dict"]
+    elif not isinstance(weights_dict, dict):
+        raise TypeError(f"Loaded weights are not a dictionary: {type(weights_dict)}")
+
+    torchfields = state_dict_to_fields(weights_dict)
+    torchfields = move_running_fields_to_the_end(torchfields)
+    jaxfields, state_indices = pytree_to_fields((resnet, state))
+
+    resnet, state = convert(
+        weights_dict,
+        (resnet, state),
+        jaxfields,
+        state_indices,
+        torchfields,
+        dtype=dtype,
+    )
+
+    if cache:
+        print(f"Caching model to: {cache_filepath}")
+        serialize_pytree((resnet, state), cache_filepath)
 
     return resnet, state
 
 
-def _resnet18(key, n_classes=1000):
-    key, subkey = jax.random.split(key)
+def _resnet18(key, n_classes=1000, dtype: Any = None):
+    key, init_key = jax.random.split(key)
     resnet, state = eqx.nn.make_with_state(ResNet)(
         BasicBlock,
         [2, 2, 2, 2],
@@ -526,16 +564,14 @@ def _resnet18(key, n_classes=1000):
         width_per_group=64,
         replace_stride_with_dilation=None,
         key=key,
+        dtype=dtype,
     )
-
-    resnet, state = _kaiming_init(resnet, state, subkey)
-
+    resnet, state = kaiming_init_conv2d(resnet, state, init_key)
     return resnet, state
 
 
-# Add all constructors for each ResNet variant
-def _resnet34(key, n_classes=1000):
-    key, subkey = jax.random.split(key)
+def _resnet34(key, n_classes=1000, dtype: Any = None):
+    key, init_key = jax.random.split(key)
     resnet, state = eqx.nn.make_with_state(ResNet)(
         BasicBlock,
         [3, 4, 6, 3],
@@ -545,15 +581,14 @@ def _resnet34(key, n_classes=1000):
         width_per_group=64,
         replace_stride_with_dilation=None,
         key=key,
+        dtype=dtype,
     )
-
-    resnet, state = _kaiming_init(resnet, state, subkey)
-
+    resnet, state = kaiming_init_conv2d(resnet, state, init_key)
     return resnet, state
 
 
-def _resnet50(key, n_classes=1000):
-    key, subkey = jax.random.split(key)
+def _resnet50(key, n_classes=1000, dtype: Any = None):
+    key, init_key = jax.random.split(key)
     resnet, state = eqx.nn.make_with_state(ResNet)(
         Bottleneck,
         [3, 4, 6, 3],
@@ -563,15 +598,14 @@ def _resnet50(key, n_classes=1000):
         width_per_group=64,
         replace_stride_with_dilation=None,
         key=key,
+        dtype=dtype,
     )
-
-    resnet, state = _kaiming_init(resnet, state, subkey)
-
+    resnet, state = kaiming_init_conv2d(resnet, state, init_key)
     return resnet, state
 
 
-def _resnet101(key, n_classes=1000):
-    key, subkey = jax.random.split(key)
+def _resnet101(key, n_classes=1000, dtype: Any = None):
+    key, init_key = jax.random.split(key)
     resnet, state = eqx.nn.make_with_state(ResNet)(
         Bottleneck,
         [3, 4, 23, 3],
@@ -581,15 +615,14 @@ def _resnet101(key, n_classes=1000):
         width_per_group=64,
         replace_stride_with_dilation=None,
         key=key,
+        dtype=dtype,
     )
-
-    resnet, state = _kaiming_init(resnet, state, subkey)
-
+    resnet, state = kaiming_init_conv2d(resnet, state, init_key)
     return resnet, state
 
 
-def _resnet152(key, n_classes=1000):
-    key, subkey = jax.random.split(key)
+def _resnet152(key, n_classes=1000, dtype: Any = None):
+    key, init_key = jax.random.split(key)
     resnet, state = eqx.nn.make_with_state(ResNet)(
         Bottleneck,
         [3, 8, 36, 3],
@@ -599,15 +632,14 @@ def _resnet152(key, n_classes=1000):
         width_per_group=64,
         replace_stride_with_dilation=None,
         key=key,
+        dtype=dtype,
     )
-
-    resnet, state = _kaiming_init(resnet, state, subkey)
-
+    resnet, state = kaiming_init_conv2d(resnet, state, init_key)
     return resnet, state
 
 
-def _resnext50_32x4d(key, n_classes=1000):
-    key, subkey = jax.random.split(key)
+def _resnext50_32x4d(key, n_classes=1000, dtype: Any = None):
+    key, init_key = jax.random.split(key)
     resnet, state = eqx.nn.make_with_state(ResNet)(
         Bottleneck,
         [3, 4, 6, 3],
@@ -617,15 +649,14 @@ def _resnext50_32x4d(key, n_classes=1000):
         width_per_group=4,
         replace_stride_with_dilation=None,
         key=key,
+        dtype=dtype,
     )
-
-    resnet, state = _kaiming_init(resnet, state, subkey)
-
+    resnet, state = kaiming_init_conv2d(resnet, state, init_key)
     return resnet, state
 
 
-def _resnext101_32x8d(key, n_classes=1000):
-    key, subkey = jax.random.split(key)
+def _resnext101_32x8d(key, n_classes=1000, dtype: Any = None):
+    key, init_key = jax.random.split(key)
     resnet, state = eqx.nn.make_with_state(ResNet)(
         Bottleneck,
         [3, 4, 23, 3],
@@ -635,15 +666,14 @@ def _resnext101_32x8d(key, n_classes=1000):
         width_per_group=8,
         replace_stride_with_dilation=None,
         key=key,
+        dtype=dtype,
     )
-
-    resnet, state = _kaiming_init(resnet, state, subkey)
-
+    resnet, state = kaiming_init_conv2d(resnet, state, init_key)
     return resnet, state
 
 
-def _resnext101_64x4d(key, n_classes=1000):
-    key, subkey = jax.random.split(key)
+def _resnext101_64x4d(key, n_classes=1000, dtype: Any = None):
+    key, init_key = jax.random.split(key)
     resnet, state = eqx.nn.make_with_state(ResNet)(
         Bottleneck,
         [3, 4, 23, 3],
@@ -653,15 +683,14 @@ def _resnext101_64x4d(key, n_classes=1000):
         width_per_group=4,
         replace_stride_with_dilation=None,
         key=key,
+        dtype=dtype,
     )
-
-    resnet, state = _kaiming_init(resnet, state, subkey)
-
+    resnet, state = kaiming_init_conv2d(resnet, state, init_key)
     return resnet, state
 
 
-def _wide_resnet50_2(key, n_classes=1000):
-    key, subkey = jax.random.split(key)
+def _wide_resnet50_2(key, n_classes=1000, dtype: Any = None):
+    key, init_key = jax.random.split(key)
     resnet, state = eqx.nn.make_with_state(ResNet)(
         Bottleneck,
         [3, 4, 6, 3],
@@ -671,15 +700,14 @@ def _wide_resnet50_2(key, n_classes=1000):
         width_per_group=64 * 2,
         replace_stride_with_dilation=None,
         key=key,
+        dtype=dtype,
     )
-
-    resnet, state = _kaiming_init(resnet, state, subkey)
-
+    resnet, state = kaiming_init_conv2d(resnet, state, init_key)
     return resnet, state
 
 
-def _wide_resnet101_2(key, n_classes=1000):
-    key, subkey = jax.random.split(key)
+def _wide_resnet101_2(key, n_classes=1000, dtype: Any = None):
+    key, init_key = jax.random.split(key)
     resnet, state = eqx.nn.make_with_state(ResNet)(
         Bottleneck,
         [3, 4, 23, 3],
@@ -689,10 +717,9 @@ def _wide_resnet101_2(key, n_classes=1000):
         width_per_group=64 * 2,
         replace_stride_with_dilation=None,
         key=key,
+        dtype=dtype,
     )
-
-    resnet, state = _kaiming_init(resnet, state, subkey)
-
+    resnet, state = kaiming_init_conv2d(resnet, state, init_key)
     return resnet, state
 
 
@@ -729,17 +756,21 @@ def _assert_model_and_weights_fit(
         "wide_resnet101_2_IMAGENET1K_V2",
     ],
 ):
-    # Check if the weights are specific (include model name)
-    if "_" in weights:
-        # Extract model name from weights string
-        weights_model = weights.split("_")[0].lower()
+    # Improved check: Handles ResNeXt and Wide ResNet naming
+    weights_prefix = weights.split("_IMAGENET")[0].lower().replace("_", "")
+    model_prefix = model.lower().replace("_", "")
 
-        # Check if the specified weights are compatible with the model
-        if not model.startswith(weights_model):
-            raise ValueError(
-                f"Model {model} is incompatible with weights {weights}. "
-                f"Expected weights starting with '{model}'."
-            )
+    # Specific check for 'x' vs 'X' in resnext
+    if "resnext" in model:
+        weights_prefix = weights_prefix.replace("x", "")
+        model_prefix = model_prefix.replace("x", "")
+
+    if not model_prefix.startswith(weights_prefix):
+        raise ValueError(
+            f"Model '{model}' is incompatible with weights '{weights}'. "
+            f"Weight prefix '{weights_prefix}' "
+            f"does not match model prefix '{model_prefix}'."
+        )
 
 
 def load_resnet(
@@ -779,51 +810,66 @@ def load_resnet(
     cache: bool = True,
     *,
     key: PRNGKeyArray | None = None,
-):
+    dtype: Any | None = None,  # Added optional dtype parameter
+) -> tuple[ResNet, eqx.nn.State]:
     """
     Load a ResNet model with optional pre-trained weights.
 
     Args:
-        model_name: The name of the ResNet model to load
-        weights: The name of the weights to load (from _MODELS), or None for random init
-        n_classes: Number of output classes
-        cache: Whether to cache the model
-        key: Random key for initialization
+        model: The name of the ResNet model architecture to load.
+        weights: The specific pre-trained weights to load
+                (e.g., "resnet50_IMAGENET1K_V2").
+                 If None, the model is initialized randomly (with Kaiming init).
+        n_classes: Number of output classes for the final fully connected layer.
+        cache: If True, attempts to load/save the JAX model with weights from/to
+        a local cache
+               (~/.jaxonmodels/models). Cache filenames include the dtype.
+        key: JAX random key for initialization. Defaults to jax.random.key(42).
+        dtype: The data type for the model's parameters
+        (e.g., jnp.float32, jnp.bfloat16).
+               Defaults to `jaxonmodels.functions.default_floating_dtype()`.
 
     Returns:
-        A tuple of (model, state)
+        A tuple containing the ResNet model (eqx.Module)
+        and its initial state (eqx.nn.State).
     """
     if key is None:
         key = jax.random.key(42)
 
-    # Create model based on requested architecture
+    # Determine default dtype if not provided
+    if dtype is None:
+        dtype = default_floating_dtype()
+    assert dtype is not None
+
+    resnet, state = None, None
+
     match model:
         case "resnet18":
-            resnet, state = _resnet18(key, n_classes)
+            resnet, state = _resnet18(key, n_classes, dtype=dtype)
         case "resnet34":
-            resnet, state = _resnet34(key, n_classes)
+            resnet, state = _resnet34(key, n_classes, dtype=dtype)
         case "resnet50":
-            resnet, state = _resnet50(key, n_classes)
+            resnet, state = _resnet50(key, n_classes, dtype=dtype)
         case "resnet101":
-            resnet, state = _resnet101(key, n_classes)
+            resnet, state = _resnet101(key, n_classes, dtype=dtype)
         case "resnet152":
-            resnet, state = _resnet152(key, n_classes)
+            resnet, state = _resnet152(key, n_classes, dtype=dtype)
         case "resnext50_32x4d":
-            resnet, state = _resnext50_32x4d(key, n_classes)
+            resnet, state = _resnext50_32x4d(key, n_classes, dtype=dtype)
         case "resnext101_32x8d":
-            resnet, state = _resnext101_32x8d(key, n_classes)
+            resnet, state = _resnext101_32x8d(key, n_classes, dtype=dtype)
         case "resnext101_64x4d":
-            resnet, state = _resnext101_64x4d(key, n_classes)
+            resnet, state = _resnext101_64x4d(key, n_classes, dtype=dtype)
         case "wide_resnet50_2":
-            resnet, state = _wide_resnet50_2(key, n_classes)
+            resnet, state = _wide_resnet50_2(key, n_classes, dtype=dtype)
         case "wide_resnet101_2":
-            resnet, state = _wide_resnet101_2(key, n_classes)
+            resnet, state = _wide_resnet101_2(key, n_classes, dtype=dtype)
         case _:
             raise ValueError(f"Unknown model name: {model}")
 
     if weights is not None:
         _assert_model_and_weights_fit(model, weights)
-        resnet, state = _with_weights((resnet, state), weights, cache)
+        resnet, state = _with_weights((resnet, state), weights, cache, dtype=dtype)
 
     assert resnet is not None
     assert state is not None

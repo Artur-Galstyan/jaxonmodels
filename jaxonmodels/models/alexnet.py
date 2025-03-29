@@ -8,6 +8,7 @@ import jax.numpy as jnp
 import jaxtyping as jt
 from beartype.typing import Any
 
+from jaxonmodels.functions import default_floating_dtype, dtype_to_str
 from jaxonmodels.layers import LocalResponseNormalization
 from jaxonmodels.statedict2pytree.s2p import (
     convert,
@@ -48,6 +49,7 @@ class AlexNet(eqx.Module):
             stride=4,
             padding=2,
             key=subkeys[0],
+            dtype=dtype,
         )
         self.conv2 = eqx.nn.Conv2d(
             in_channels=64,
@@ -56,6 +58,7 @@ class AlexNet(eqx.Module):
             stride=1,
             padding=2,
             key=subkeys[1],
+            dtype=dtype,
         )
         self.conv3 = eqx.nn.Conv2d(
             in_channels=192,
@@ -64,6 +67,7 @@ class AlexNet(eqx.Module):
             stride=1,
             padding=1,
             key=subkeys[2],
+            dtype=dtype,
         )
         self.conv4 = eqx.nn.Conv2d(
             in_channels=384,
@@ -72,6 +76,7 @@ class AlexNet(eqx.Module):
             stride=1,
             padding=1,
             key=subkeys[3],
+            dtype=dtype,
         )
         self.conv5 = eqx.nn.Conv2d(
             in_channels=256,
@@ -80,6 +85,7 @@ class AlexNet(eqx.Module):
             stride=1,
             padding=1,
             key=subkeys[4],
+            dtype=dtype,
         )
 
         self.lrn1 = LocalResponseNormalization()
@@ -88,14 +94,18 @@ class AlexNet(eqx.Module):
         self.max_pool_2 = eqx.nn.MaxPool2d(kernel_size=3, stride=2)
         self.max_pool_3 = eqx.nn.MaxPool2d(kernel_size=3, stride=2)
 
-        self.dense1 = eqx.nn.Linear(in_features=9216, out_features=4096, key=subkeys[5])
-        self.dense2 = eqx.nn.Linear(in_features=4096, out_features=4096, key=subkeys[6])
+        self.dense1 = eqx.nn.Linear(
+            in_features=9216, out_features=4096, key=subkeys[5], dtype=dtype
+        )
+        self.dense2 = eqx.nn.Linear(
+            in_features=4096, out_features=4096, key=subkeys[6], dtype=dtype
+        )
 
         self.dropout1 = eqx.nn.Dropout()
         self.dropout2 = eqx.nn.Dropout()
 
         self.final = eqx.nn.Linear(
-            in_features=4096, out_features=n_classes, key=subkeys[7]
+            in_features=4096, out_features=n_classes, key=subkeys[7], dtype=dtype
         )
 
     def __call__(
@@ -141,16 +151,22 @@ class AlexNet(eqx.Module):
         return x
 
 
-def alexnet(with_weights: bool = False, cache: bool = True) -> "AlexNet":
+def alexnet(
+    with_weights: bool = False, cache: bool = True, dtype: Any | None = None
+) -> "AlexNet":
+    if dtype is None:
+        dtype = default_floating_dtype()
+    assert dtype is not None
+    dtype_str = dtype_to_str(dtype)
     jaxonmodels_dir = os.path.expanduser("~/.jaxonmodels/models")
     os.makedirs(jaxonmodels_dir, exist_ok=True)
-    alexnet = AlexNet(n_classes=1000, key=jax.random.key(0))
+    alexnet = AlexNet(n_classes=1000, key=jax.random.key(0), dtype=dtype)
     if not with_weights:
         return alexnet
     if cache:
-        if os.path.exists(str(Path(jaxonmodels_dir) / "alexnet.eqx")):
+        if os.path.exists(str(Path(jaxonmodels_dir) / f"alexnet-{dtype_str}.eqx")):
             return eqx.tree_deserialise_leaves(
-                str(Path(jaxonmodels_dir) / "alexnet.eqx"), alexnet
+                str(Path(jaxonmodels_dir) / f"alexnet-{dtype_str}.eqx"), alexnet
             )
 
     weights_url = "https://download.pytorch.org/models/alexnet-owt-7be5be79.pth"
@@ -170,9 +186,11 @@ def alexnet(with_weights: bool = False, cache: bool = True) -> "AlexNet":
     torchfields = state_dict_to_fields(weights_dict)
     jaxfields, _ = pytree_to_fields(alexnet)
 
-    alexnet = convert(weights_dict, alexnet, jaxfields, None, torchfields)
+    alexnet = convert(weights_dict, alexnet, jaxfields, None, torchfields, dtype=dtype)
 
     if cache:
-        serialize_pytree(alexnet, str(Path(jaxonmodels_dir) / "alexnet.eqx"))
+        serialize_pytree(
+            alexnet, str(Path(jaxonmodels_dir) / f"alexnet-{dtype_str}.eqx")
+        )
 
     return alexnet

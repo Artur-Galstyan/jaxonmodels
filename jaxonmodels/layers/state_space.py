@@ -1,9 +1,10 @@
 import equinox as eqx
 import jax
 import jax.numpy as jnp
+from beartype.typing import Any
 from jaxtyping import Array, Float, PRNGKeyArray
 
-from jaxonmodels.functions import selective_scan
+from jaxonmodels.functions import default_floating_dtype, selective_scan
 
 
 class SelectiveStateSpaceModel(eqx.Module):
@@ -25,7 +26,11 @@ class SelectiveStateSpaceModel(eqx.Module):
         use_delta_proj_bias: bool = False,
         *,
         key: PRNGKeyArray,
+        dtype: Any | None = None,
     ):
+        if dtype is None:
+            dtype = default_floating_dtype()
+        assert dtype is not None
         self.d_inner = d_inner
         self.dt_rank = dt_rank
         self.d_state = d_state
@@ -39,14 +44,19 @@ class SelectiveStateSpaceModel(eqx.Module):
             dt_rank + d_state * 2,
             use_bias=use_input_proj_bias,
             key=input_proj_key,
+            dtype=dtype,
         )
 
         self.delta_proj = eqx.nn.Linear(
-            dt_rank, d_inner, use_bias=use_delta_proj_bias, key=delta_proj_key
+            dt_rank,
+            d_inner,
+            use_bias=use_delta_proj_bias,
+            key=delta_proj_key,
+            dtype=dtype,
         )
         A = jnp.repeat(jnp.arange(1, d_state + 1), d_inner).reshape(d_inner, d_state)
         self.A_log = jnp.log(A)
-        self.D = jnp.ones(d_inner)
+        self.D = jnp.ones(d_inner, dtype=dtype)
 
     def __call__(self, x: Float[Array, "seq_length d_inner"]):
         A = -jnp.exp(self.A_log)

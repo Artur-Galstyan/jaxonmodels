@@ -9,6 +9,7 @@ from beartype.typing import Any, Literal
 from jaxtyping import Array, Float, Int, PRNGKeyArray, PyTree
 
 import jaxonmodels.functions as F
+from jaxonmodels.functions import default_floating_dtype, dtype_to_str
 from jaxonmodels.layers import BatchNorm, MultiheadAttention
 from jaxonmodels.statedict2pytree.s2p import (
     convert,
@@ -42,6 +43,7 @@ class Downsample(eqx.Module):
         out_channels: int,
         stride: int,
         key: PRNGKeyArray,
+        dtype: Any,
     ):
         _, subkey = jax.random.split(key)
         self.avg = eqx.nn.AvgPool2d(kernel_size=stride, stride=stride)
@@ -52,9 +54,10 @@ class Downsample(eqx.Module):
             stride=1,
             use_bias=False,
             key=subkey,
+            dtype=dtype,
         )
 
-        self.bn = BatchNorm(out_channels, axis_name="batch")
+        self.bn = BatchNorm(out_channels, axis_name="batch", dtype=dtype)
 
     def __call__(
         self,
@@ -94,13 +97,19 @@ class Bottleneck(eqx.Module):
         *,
         axis_name: str = "batch",
         key: PRNGKeyArray,
+        dtype: Any,
     ):
         _, *subkeys = jax.random.split(key, 4)
 
         self.conv1 = eqx.nn.Conv2d(
-            in_channels, out_channels, kernel_size=1, use_bias=False, key=subkeys[0]
+            in_channels,
+            out_channels,
+            kernel_size=1,
+            use_bias=False,
+            key=subkeys[0],
+            dtype=dtype,
         )
-        self.bn1 = BatchNorm(out_channels, axis_name=axis_name)
+        self.bn1 = BatchNorm(out_channels, axis_name=axis_name, dtype=dtype)
 
         self.conv2 = eqx.nn.Conv2d(
             out_channels,
@@ -110,9 +119,10 @@ class Bottleneck(eqx.Module):
             padding=1,
             use_bias=False,
             key=subkeys[1],
+            dtype=dtype,
         )
 
-        self.bn2 = BatchNorm(out_channels, axis_name=axis_name)
+        self.bn2 = BatchNorm(out_channels, axis_name=axis_name, dtype=dtype)
 
         self.avgpool = (
             eqx.nn.AvgPool2d(kernel_size=stride, stride=stride) if stride > 1 else None
@@ -124,16 +134,23 @@ class Bottleneck(eqx.Module):
             kernel_size=1,
             key=subkeys[2],
             use_bias=False,
+            dtype=dtype,
         )
 
-        self.bn3 = BatchNorm(out_channels * self.expansion, axis_name=axis_name)
+        self.bn3 = BatchNorm(
+            out_channels * self.expansion, axis_name=axis_name, dtype=dtype
+        )
 
         self.downsample = None
 
         if stride > 1 or in_channels != out_channels * Bottleneck.expansion:
             key, subkey = jax.random.split(key)
             self.downsample = Downsample(
-                in_channels, out_channels * self.expansion, stride=stride, key=subkey
+                in_channels,
+                out_channels * self.expansion,
+                stride=stride,
+                key=subkey,
+                dtype=dtype,
             )
 
     def __call__(self, x: Array, state: eqx.nn.State, inference: bool = False):
@@ -175,15 +192,19 @@ class AttentionPool2d(eqx.Module):
         output_dim: int | None = None,
         *,
         key: PRNGKeyArray,
+        dtype: Any,
     ):
         key, *subkeys = jax.random.split(key, 5)
         self.positional_embedding = (
-            jax.random.normal(key, (spacial_dim**2 + 1, embed_dim)) / embed_dim**0.5
+            jax.random.normal(key, (spacial_dim**2 + 1, embed_dim), dtype=dtype)
+            / embed_dim**0.5
         )
-        self.k_proj = eqx.nn.Linear(embed_dim, embed_dim, key=subkeys[0])
-        self.q_proj = eqx.nn.Linear(embed_dim, embed_dim, key=subkeys[1])
-        self.v_proj = eqx.nn.Linear(embed_dim, embed_dim, key=subkeys[2])
-        self.c_proj = eqx.nn.Linear(embed_dim, output_dim or embed_dim, key=subkeys[3])
+        self.k_proj = eqx.nn.Linear(embed_dim, embed_dim, key=subkeys[0], dtype=dtype)
+        self.q_proj = eqx.nn.Linear(embed_dim, embed_dim, key=subkeys[1], dtype=dtype)
+        self.v_proj = eqx.nn.Linear(embed_dim, embed_dim, key=subkeys[2], dtype=dtype)
+        self.c_proj = eqx.nn.Linear(
+            embed_dim, output_dim or embed_dim, key=subkeys[3], dtype=dtype
+        )
         self.num_heads = num_heads
 
     def __call__(self, x: Float[Array, "c h w"], inference: bool = False):
@@ -264,6 +285,7 @@ class ModifiedResNet(eqx.Module):
         *,
         key: PRNGKeyArray,
         axis_name: str = "batch",
+        dtype: Any,
     ):
         self.output_dim = output_dim
         self.input_resolution = input_resolution
@@ -279,6 +301,7 @@ class ModifiedResNet(eqx.Module):
             padding=1,
             use_bias=False,
             key=subkeys[0],
+            dtype=dtype,
         )
         self.bn1 = BatchNorm(width // 2, axis_name=axis_name)
 
@@ -289,35 +312,61 @@ class ModifiedResNet(eqx.Module):
             padding=1,
             use_bias=False,
             key=subkeys[1],
+            dtype=dtype,
         )
-        self.bn2 = BatchNorm(width // 2, axis_name=axis_name)
+        self.bn2 = BatchNorm(width // 2, axis_name=axis_name, dtype=dtype)
 
         self.conv3 = eqx.nn.Conv2d(
-            width // 2, width, kernel_size=3, padding=1, use_bias=False, key=subkeys[2]
+            width // 2,
+            width,
+            kernel_size=3,
+            padding=1,
+            use_bias=False,
+            key=subkeys[2],
+            dtype=dtype,
         )
-        self.bn3 = BatchNorm(width, axis_name=axis_name)
+        self.bn3 = BatchNorm(width, axis_name=axis_name, dtype=dtype)
         self.avgpool = eqx.nn.AvgPool2d(2, stride=2)
 
         key, *subkeys = jax.random.split(key, 7)
 
         self._inplanes = width
-        self.layer1 = self._make_layer(width, layers[0], key=subkeys[0])
-        self.layer2 = self._make_layer(width * 2, layers[1], stride=2, key=subkeys[1])
-        self.layer3 = self._make_layer(width * 4, layers[2], stride=2, key=subkeys[2])
-        self.layer4 = self._make_layer(width * 8, layers[3], stride=2, key=subkeys[3])
+        self.layer1 = self._make_layer(width, layers[0], key=subkeys[0], dtype=dtype)
+        self.layer2 = self._make_layer(
+            width * 2, layers[1], stride=2, key=subkeys[1], dtype=dtype
+        )
+        self.layer3 = self._make_layer(
+            width * 4, layers[2], stride=2, key=subkeys[2], dtype=dtype
+        )
+        self.layer4 = self._make_layer(
+            width * 8, layers[3], stride=2, key=subkeys[3], dtype=dtype
+        )
 
         embed_dim = width * 32  # the ResNet feature dimension
         self.attnpool = AttentionPool2d(
-            input_resolution // 32, embed_dim, heads, output_dim, key=subkeys[4]
+            input_resolution // 32,
+            embed_dim,
+            heads,
+            output_dim,
+            key=subkeys[4],
+            dtype=dtype,
         )
 
-    def _make_layer(self, planes, blocks, stride=1, *, key: PRNGKeyArray):
+    def _make_layer(
+        self, planes, blocks, stride=1, *, key: PRNGKeyArray, dtype: Any | None
+    ):
         key, *subkeys = jax.random.split(key, blocks + 1)
-        layers = [Bottleneck(self._inplanes, planes, stride, key=subkeys[0])]
+        layers = [
+            Bottleneck(self._inplanes, planes, stride, key=subkeys[0], dtype=dtype)
+        ]
 
         self._inplanes = planes * Bottleneck.expansion
         for i in range(1, blocks):
-            layers.append(Bottleneck(self._inplanes, planes, stride=1, key=subkeys[i]))
+            layers.append(
+                Bottleneck(
+                    self._inplanes, planes, stride=1, key=subkeys[i], dtype=dtype
+                )
+            )
 
         return ResNetBlock(layers)
 
@@ -357,19 +406,13 @@ class ResidualAttentionBlock(eqx.Module):
     c_proj: eqx.nn.Linear
     ln_2: eqx.nn.LayerNorm
 
-    def __init__(
-        self,
-        d_model: int,
-        n_head: int,
-        *,
-        key: PRNGKeyArray,
-    ):
+    def __init__(self, d_model: int, n_head: int, *, key: PRNGKeyArray, dtype: Any):
         key, *subkeys = jax.random.split(key, 5)
-        self.attn = MultiheadAttention(d_model, n_head, key=subkeys[0])
-        self.ln_1 = eqx.nn.LayerNorm(d_model)
-        self.c_fc = eqx.nn.Linear(d_model, d_model * 4, key=subkeys[1])
-        self.c_proj = eqx.nn.Linear(d_model * 4, d_model, key=subkeys[2])
-        self.ln_2 = eqx.nn.LayerNorm(d_model)
+        self.attn = MultiheadAttention(d_model, n_head, key=subkeys[0], dtype=dtype)
+        self.ln_1 = eqx.nn.LayerNorm(d_model, dtype=dtype)
+        self.c_fc = eqx.nn.Linear(d_model, d_model * 4, key=subkeys[1], dtype=dtype)
+        self.c_proj = eqx.nn.Linear(d_model * 4, d_model, key=subkeys[2], dtype=dtype)
+        self.ln_2 = eqx.nn.LayerNorm(d_model, dtype=dtype)
 
     def _attention(self, x: Array, attn_mask: Array | None = None):
         return self.attn(x, x, x, need_weights=False, attn_mask=attn_mask)[0]
@@ -389,10 +432,13 @@ class ResidualAttentionBlock(eqx.Module):
 class Transformer(eqx.Module):
     resblocks: list[ResidualAttentionBlock]
 
-    def __init__(self, width: int, layers: int, heads: int, *, key: PRNGKeyArray):
+    def __init__(
+        self, width: int, layers: int, heads: int, *, key: PRNGKeyArray, dtype: Any
+    ):
         key, *subkeys = jax.random.split(key, layers + 1)
         self.resblocks = [
-            ResidualAttentionBlock(width, heads, key=subkeys[i]) for i in range(layers)
+            ResidualAttentionBlock(width, heads, key=subkeys[i], dtype=dtype)
+            for i in range(layers)
         ]
 
     def __call__(
@@ -423,6 +469,7 @@ class VisionTransformer(eqx.Module):
         output_dim: int,
         *,
         key: PRNGKeyArray,
+        dtype: Any,
     ):
         key, *subkeys = jax.random.split(key, 6)
         self.conv1 = eqx.nn.Conv2d(
@@ -432,20 +479,27 @@ class VisionTransformer(eqx.Module):
             stride=patch_size,
             use_bias=False,
             key=subkeys[0],
+            dtype=dtype,
         )
 
         scale = width**-0.5
-        self.class_embedding = jax.random.normal(subkeys[1], (width,)) * scale
+        self.class_embedding = (
+            jax.random.normal(subkeys[1], (width,), dtype=dtype) * scale
+        )
         self.positional_embedding = scale * jax.random.normal(
-            subkeys[2], ((input_resolution // patch_size) ** 2 + 1, width)
+            subkeys[2], ((input_resolution // patch_size) ** 2 + 1, width), dtype=dtype
         )
 
-        self.ln_pre = eqx.nn.LayerNorm(width)
+        self.ln_pre = eqx.nn.LayerNorm(width, dtype=dtype)
 
-        self.transformer = Transformer(width, layers, heads, key=subkeys[3])
+        self.transformer = Transformer(
+            width, layers, heads, key=subkeys[3], dtype=dtype
+        )
 
-        self.ln_post = eqx.nn.LayerNorm(width)
-        self.proj = scale * jax.random.normal(subkeys[4], (width, output_dim))
+        self.ln_post = eqx.nn.LayerNorm(width, dtype=dtype)
+        self.proj = scale * jax.random.normal(
+            subkeys[4], (width, output_dim), dtype=dtype
+        )
 
     def __call__(
         self,
@@ -502,8 +556,11 @@ class CLIP(eqx.Module):
         transformer_layers: int,
         *,
         key: PRNGKeyArray | None = None,
-        dtype: Any | None = None,  # todo: set target dtype
+        dtype: Any | None = None,
     ):
+        if dtype is None:
+            dtype = default_floating_dtype()
+        assert dtype is not None
         self.context_length = context_length
         if key is None:
             # use default key
@@ -519,6 +576,7 @@ class CLIP(eqx.Module):
                 input_resolution=image_resolution,
                 width=vision_width,
                 key=subkeys[0],
+                dtype=dtype,
             )
         else:
             vision_heads = vision_width // 64
@@ -531,27 +589,32 @@ class CLIP(eqx.Module):
                 heads=vision_heads,
                 output_dim=embed_dim,
                 key=subkeys[0],
+                dtype=dtype,
             )
         self.transformer = Transformer(
             width=transformer_width,
             layers=transformer_layers,
             heads=transformer_heads,
             key=subkeys[1],
+            dtype=dtype,
         )
         self.token_embedding = eqx.nn.Embedding(
             weight=jax.random.normal(
                 key=subkeys[2], shape=(vocab_size, transformer_width)
             )
-            * 0.02
+            * 0.02,
+            dtype=dtype,
         )
         self.positional_embedding = (
-            jax.random.normal(key=subkeys[3], shape=(context_length, transformer_width))
+            jax.random.normal(
+                key=subkeys[3], shape=(context_length, transformer_width), dtype=dtype
+            )
             * 0.01
         )
-        self.ln_final = eqx.nn.LayerNorm(transformer_width)
+        self.ln_final = eqx.nn.LayerNorm(transformer_width, dtype=dtype)
 
-        self.text_projection = jnp.empty((transformer_width, embed_dim))
-        self.logit_scale = jnp.ones([]) * jnp.log(1 / 0.07)
+        self.text_projection = jnp.empty((transformer_width, embed_dim), dtype=dtype)
+        self.logit_scale = jnp.ones([], dtype=dtype) * jnp.log(1 / 0.07)
 
     def initialize_parameters(self, key: PRNGKeyArray):
         # todo
@@ -614,8 +677,10 @@ def _with_weights(
         "ViT-L/14@336px",
     ],
     cache: bool,
+    dtype: Any,
 ):
     clip, state = pytree
+    dtype_str = dtype_to_str(dtype)
     if model is not None:
         weights_url = _MODELS.get(model)
         if weights_url is None:
@@ -625,10 +690,15 @@ def _with_weights(
 
         if cache:
             if os.path.exists(
-                str(Path(jaxonmodels_dir) / f"{model.replace('/', '_')}.eqx")
+                str(
+                    Path(jaxonmodels_dir) / f"{model.replace('/', '_')}-{dtype_str}.eqx"
+                )
             ):
                 return eqx.tree_deserialise_leaves(
-                    str(Path(jaxonmodels_dir) / f"{model.replace('/', '_')}.eqx"),
+                    str(
+                        Path(jaxonmodels_dir)
+                        / f"{model.replace('/', '_')}-{dtype_str}.eqx"
+                    ),
                     (clip, state),
                 )
         weights_dir = os.path.expanduser("~/.jaxonmodels/pytorch_weights")
@@ -661,12 +731,14 @@ def _with_weights(
         if cache:
             serialize_pytree(
                 (clip, state),
-                str(Path(jaxonmodels_dir) / f"{model.replace('/', '_')}.eqx"),
+                str(
+                    Path(jaxonmodels_dir) / f"{model.replace('/', '_')}-{dtype_str}.eqx"
+                ),
             )
     return clip, state
 
 
-def _clip_resnet50(key: PRNGKeyArray):
+def _clip_resnet50(key: PRNGKeyArray, dtype: Any):
     embed_dim = 1024
     image_resolution = 224
     vision_layers = (3, 4, 6, 3)
@@ -690,12 +762,13 @@ def _clip_resnet50(key: PRNGKeyArray):
         transformer_heads,
         transformer_layers,
         key=key,
+        dtype=dtype,
     )
 
     return clip, state
 
 
-def _clip_resnet101(key: PRNGKeyArray):
+def _clip_resnet101(key: PRNGKeyArray, dtype: Any):
     embed_dim = 512
     image_resolution = 224
     vision_layers = (3, 4, 23, 3)
@@ -719,12 +792,13 @@ def _clip_resnet101(key: PRNGKeyArray):
         transformer_heads,
         transformer_layers,
         key=key,
+        dtype=dtype,
     )
 
     return clip, state
 
 
-def _clip_rn50x4(key: PRNGKeyArray):
+def _clip_rn50x4(key: PRNGKeyArray, dtype: Any):
     embed_dim = 640
     image_resolution = 288
     vision_layers = (4, 6, 10, 6)
@@ -748,12 +822,13 @@ def _clip_rn50x4(key: PRNGKeyArray):
         transformer_heads,
         transformer_layers,
         key=key,
+        dtype=dtype,
     )
 
     return clip, state
 
 
-def _clip_rn50x16(key: PRNGKeyArray):
+def _clip_rn50x16(key: PRNGKeyArray, dtype: Any):
     embed_dim = 768
     image_resolution = 384
     vision_layers = (6, 8, 18, 8)
@@ -777,12 +852,13 @@ def _clip_rn50x16(key: PRNGKeyArray):
         transformer_heads,
         transformer_layers,
         key=key,
+        dtype=dtype,
     )
 
     return clip, state
 
 
-def _clip_rn50x64(key: PRNGKeyArray):
+def _clip_rn50x64(key: PRNGKeyArray, dtype: Any):
     embed_dim = 1024
     image_resolution = 448
     vision_layers = (3, 15, 36, 10)
@@ -806,12 +882,13 @@ def _clip_rn50x64(key: PRNGKeyArray):
         transformer_heads,
         transformer_layers,
         key=key,
+        dtype=dtype,
     )
 
     return clip, state
 
 
-def _clip_vit_b_16(key: PRNGKeyArray):
+def _clip_vit_b_16(key: PRNGKeyArray, dtype: Any):
     embed_dim = 512
     image_resolution = 224
     vision_layers = 12
@@ -835,12 +912,13 @@ def _clip_vit_b_16(key: PRNGKeyArray):
         transformer_heads,
         transformer_layers,
         key=key,
+        dtype=dtype,
     )
 
     return clip, state
 
 
-def _clip_vit_b_32(key: PRNGKeyArray):
+def _clip_vit_b_32(key: PRNGKeyArray, dtype: Any):
     embed_dim = 512
     image_resolution = 224
     vision_layers = 12
@@ -864,12 +942,13 @@ def _clip_vit_b_32(key: PRNGKeyArray):
         transformer_heads,
         transformer_layers,
         key=key,
+        dtype=dtype,
     )
 
     return clip, state
 
 
-def _clip_vit_l_14(key: PRNGKeyArray):
+def _clip_vit_l_14(key: PRNGKeyArray, dtype: Any):
     embed_dim = 768
     image_resolution = 224
     vision_layers = 24
@@ -893,12 +972,13 @@ def _clip_vit_l_14(key: PRNGKeyArray):
         transformer_heads,
         transformer_layers,
         key=key,
+        dtype=dtype,
     )
 
     return clip, state
 
 
-def _clip_vit_l_14_336px(key: PRNGKeyArray):
+def _clip_vit_l_14_336px(key: PRNGKeyArray, dtype: Any):
     embed_dim = 768
     image_resolution = 336
     vision_layers = 24
@@ -922,6 +1002,7 @@ def _clip_vit_l_14_336px(key: PRNGKeyArray):
         transformer_heads,
         transformer_layers,
         key=key,
+        dtype=dtype,
     )
 
     return clip, state
@@ -943,36 +1024,40 @@ def load_clip(
     cache: bool = True,
     *,
     key: PRNGKeyArray | None = None,
+    dtype: Any | None = None,
 ):
+    if dtype is None:
+        dtype = default_floating_dtype()
+    assert dtype is not None
     if key is None:
         key = jax.random.key(42)
     clip, state = None, None
 
     match model:
         case "RN50":
-            clip, state = _clip_resnet50(key=key)
+            clip, state = _clip_resnet50(key=key, dtype=dtype)
         case "RN101":
-            clip, state = _clip_resnet101(key=key)
+            clip, state = _clip_resnet101(key=key, dtype=dtype)
         case "RN50x4":
-            clip, state = _clip_rn50x4(key=key)
+            clip, state = _clip_rn50x4(key=key, dtype=dtype)
         case "RN50x16":
-            clip, state = _clip_rn50x16(key=key)
+            clip, state = _clip_rn50x16(key=key, dtype=dtype)
         case "RN50x64":
-            clip, state = _clip_rn50x64(key=key)
+            clip, state = _clip_rn50x64(key=key, dtype=dtype)
         case "ViT-B/32":
-            clip, state = _clip_vit_b_32(key=key)
+            clip, state = _clip_vit_b_32(key=key, dtype=dtype)
         case "ViT-B/16":
-            clip, state = _clip_vit_b_16(key=key)
+            clip, state = _clip_vit_b_16(key=key, dtype=dtype)
         case "ViT-L/14":
-            clip, state = _clip_vit_l_14(key=key)
+            clip, state = _clip_vit_l_14(key=key, dtype=dtype)
         case "ViT-L/14@336px":
-            clip, state = _clip_vit_l_14_336px(key=key)
+            clip, state = _clip_vit_l_14_336px(key=key, dtype=dtype)
 
     if clip is None or state is None:
         raise ValueError(f"Unrecognised model passed: {model}")
 
     if with_weights:
-        clip, state = _with_weights((clip, state), model, cache)
+        clip, state = _with_weights((clip, state), model, cache, dtype=dtype)
 
     assert clip is not None
     assert state is not None
