@@ -49,5 +49,5 @@ reportMissingImports = false
 
 
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling>=1.26.1"]
 build-backend = "hatchling.build"
