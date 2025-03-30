@@ -19,7 +19,12 @@ jobs:
           enable-cache: true
           cache-dependency-glob: "uv.lock"
       - name: Install the project
-        run: uv sync --all-extras --dev
+        run: |
+          uv venv
+          source .venv/bin/activate
+          uv pip install -e . -U
+          uv pip install .[dev,test]
+
       - name: Install torch and torchvision explicitly
         run: |
           uv pip install torch==2.2.0 torchvision==0.17.0 --index-url https://download.pytorch.org/whl/cpu
