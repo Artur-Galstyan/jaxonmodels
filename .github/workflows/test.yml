@@ -25,7 +25,7 @@ jobs:
           uv pip install torch==2.2.0 torchvision==0.17.0 --index-url https://download.pytorch.org/whl/cpu
       - name: Check installed package versions
         run: |
-          python -c "import torch; print(f'PyTorch version: {torch.__version__}')"
-          python -c "import torchvision; print(f'TorchVision version: {torchvision.__version__}')"
+          uv python -c "import torch; print(f'PyTorch version: {torch.__version__}')"
+          uv python -c "import torchvision; print(f'TorchVision version: {torchvision.__version__}')"
       - name: Run tests
         run: uv run pytest tests --jaxtyping-packages=jaxonmodels,beartype.beartype
