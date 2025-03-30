@@ -27,7 +27,7 @@ jobs:
           cache-dependency-glob: "uv.lock"
 
       - name: Install the project
-        run: uv venv && uv pip install -e ".[dev,test]"
+        run: uv sync --all-extras --dev
 
       - name: Run tests
         run: uv run pytest tests --jaxtyping-packages=jaxonmodels,beartype.beartype

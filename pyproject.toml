@@ -28,8 +28,6 @@ dev = ["pre-commit", "pytest", "mkdocs"]
 examples = ["tensorflow-cpu", "tensorflow_datasets", "clu", "requests"]
 tests = ["torch", "torchvision"]
 
-
-
 [tool.uv.sources]
 torch = { index = "pytorch" }
 
