@@ -1,4 +1,5 @@
 import equinox as eqx
+from beartype.typing import Literal
 from jaxtyping import Array, PRNGKeyArray
 
 from jaxonmodels.functions import (
@@ -10,7 +11,7 @@ class StochasticDepth(eqx.Module):
     p: float = eqx.field(static=True)
     mode: str = eqx.field(static=True)
 
-    def __init__(self, p: float, mode: str) -> None:
+    def __init__(self, p: float, mode: Literal["row", "batch"]) -> None:
         self.p = p
         self.mode = mode
 
