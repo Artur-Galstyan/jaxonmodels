@@ -23,10 +23,7 @@ jobs:
       - name: Install torch and torchvision explicitly
         run: |
           uv pip install torch==2.2.0 torchvision==0.17.0 --index-url https://download.pytorch.org/whl/cpu
-      - name: Check installed package versions
+      - name: Run tests
         run: |
           source .venv/bin/activate
-          python3 -c "import torch; print(f'PyTorch version: {torch.__version__}')"
-          python3 -c "import torchvision; print(f'TorchVision version: {torchvision.__version__}')"
-      - name: Run tests
-        run: uv run pytest tests --jaxtyping-packages=jaxonmodels,beartype.beartype
+          python3 -m pytest tests --jaxtyping-packages=jaxonmodels,beartype.beartype
