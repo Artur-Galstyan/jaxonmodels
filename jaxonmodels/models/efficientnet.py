@@ -10,15 +10,19 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 from beartype.typing import Any, Callable, Literal, Sequence
-from jaxtyping import Array, Float, PRNGKeyArray
+from jaxtyping import Array, PRNGKeyArray
 
 from jaxonmodels.functions import (
     default_floating_dtype,
     make_divisible,
-    make_ntuple,
 )
 from jaxonmodels.functions.utils import dtype_to_str
-from jaxonmodels.layers import BatchNorm, SqueezeExcitation, StochasticDepth
+from jaxonmodels.layers import (
+    BatchNorm,
+    ConvNormActivation,
+    SqueezeExcitation,
+    StochasticDepth,
+)
 from jaxonmodels.statedict2pytree.s2p import (
     convert,
     move_running_fields_to_the_end,
@@ -114,98 +118,14 @@ class FusedMBConvConfig(_MBConvConfig):
         )
 
 
-class Conv2dNormActivation(eqx.Module):
-    conv2d: eqx.nn.Conv2d
-    norm: eqx.Module | None
-    activation: eqx.nn.Lambda | None
-
-    def __init__(
-        self,
-        in_channels: int,
-        out_channels: int,
-        kernel_size: int | Sequence[int] = 3,
-        stride: int | Sequence[int] = 1,
-        padding: str | int | Sequence[int] | Sequence[tuple[int, int]] | None = None,
-        groups: int = 1,
-        norm_layer: Callable[..., eqx.Module] | None = BatchNorm,
-        activation_layer: Callable[..., Array] | None = jax.nn.relu,
-        dilation: int | Sequence[int] = 1,
-        use_bias: bool | None = None,
-        axis_name: str = "batch",
-        *,
-        key: PRNGKeyArray,
-        dtype: Any,
-    ):
-        if padding is None:
-            if isinstance(kernel_size, int) and isinstance(dilation, int):
-                padding = (kernel_size - 1) // 2 * dilation
-            else:
-                _conv_dim = (
-                    len(kernel_size)
-                    if isinstance(kernel_size, Sequence)
-                    else len(dilation)  # pyright: ignore
-                )
-                kernel_size = make_ntuple(kernel_size, _conv_dim)
-                dilation = make_ntuple(dilation, _conv_dim)
-                padding = tuple(
-                    (kernel_size[i] - 1) // 2 * dilation[i] for i in range(_conv_dim)
-                )
-        if use_bias is None:
-            use_bias = norm_layer is None
-
-        key, subkey = jax.random.split(key)
-
-        self.conv2d = eqx.nn.Conv2d(
-            in_channels=in_channels,
-            out_channels=out_channels,
-            kernel_size=kernel_size,
-            stride=stride,
-            padding=padding,
-            dilation=dilation,
-            groups=groups,
-            use_bias=use_bias,
-            dtype=dtype,
-            key=subkey,
-        )
-
-        self.norm = None
-        if norm_layer is not None:
-            if norm_layer is BatchNorm:
-                self.norm = norm_layer(out_channels, axis_name=axis_name, dtype=dtype)
-            else:
-                self.norm = norm_layer(out_channels, axis_name=axis_name, dtype=dtype)
-
-        if activation_layer is not None:
-            self.activation = eqx.nn.Lambda(activation_layer)
-        else:
-            self.activation = None
-
-    def __call__(
-        self,
-        x: Float[Array, "c h w"],
-        state: eqx.nn.State,
-        inference: bool,
-        key: PRNGKeyArray | None = None,
-    ) -> tuple[Float[Array, "c_out h_out w_out"], eqx.nn.State]:
-        x = self.conv2d(x)
-
-        if self.norm:
-            x, state = self.norm(x, state, inference=inference)  # pyright: ignore
-
-        if self.activation:
-            x = self.activation(x)
-
-        return x, state
-
-
 class MBConv(eqx.Module):
     use_res_connect: bool = eqx.field(static=True)
 
-    expand_conv2d: Conv2dNormActivation | None
-    depthwise_conv2d: Conv2dNormActivation
+    expand_conv2d: ConvNormActivation | None
+    depthwise_conv2d: ConvNormActivation
     se_layer: SqueezeExcitation
 
-    project_conv2d: Conv2dNormActivation
+    project_conv2d: ConvNormActivation
     stochastic_depth: StochasticDepth
 
     def __init__(
@@ -229,7 +149,8 @@ class MBConv(eqx.Module):
         self.expand_conv2d = None
         if expanded_channels != cnf.input_channels:
             key, subkey = jax.random.split(key)
-            self.expand_conv2d = Conv2dNormActivation(
+            self.expand_conv2d = ConvNormActivation(
+                2,
                 cnf.input_channels,
                 expanded_channels,
                 kernel_size=1,
@@ -241,7 +162,8 @@ class MBConv(eqx.Module):
 
         # depthwise
         key, subkey = jax.random.split(key)
-        self.depthwise_conv2d = Conv2dNormActivation(
+        self.depthwise_conv2d = ConvNormActivation(
+            2,
             expanded_channels,
             expanded_channels,
             kernel_size=cnf.kernel,
@@ -261,7 +183,8 @@ class MBConv(eqx.Module):
 
         # project
         key, subkey = jax.random.split(key)
-        self.project_conv2d = Conv2dNormActivation(
+        self.project_conv2d = ConvNormActivation(
+            2,
             expanded_channels,
             cnf.out_channels,
             kernel_size=1,
@@ -291,8 +214,8 @@ class MBConv(eqx.Module):
 
 
 class FusedMBConv(eqx.Module):
-    fused_expand: Conv2dNormActivation
-    project: Conv2dNormActivation | None
+    fused_expand: ConvNormActivation
+    project: ConvNormActivation | None
     stochastic_depth: StochasticDepth
 
     use_res_connect: bool = eqx.field(static=True)
@@ -316,7 +239,8 @@ class FusedMBConv(eqx.Module):
         if expanded_channels != cnf.input_channels:
             # fused expand
             key, subkey, subkey2 = jax.random.split(key, 3)
-            self.fused_expand = Conv2dNormActivation(
+            self.fused_expand = ConvNormActivation(
+                2,
                 cnf.input_channels,
                 expanded_channels,
                 kernel_size=cnf.kernel,
@@ -328,7 +252,8 @@ class FusedMBConv(eqx.Module):
             )
 
             # project
-            self.project = Conv2dNormActivation(
+            self.project = ConvNormActivation(
+                2,
                 expanded_channels,
                 cnf.out_channels,
                 kernel_size=1,
@@ -339,7 +264,8 @@ class FusedMBConv(eqx.Module):
             )
         else:
             key, subkey = jax.random.split(key)
-            self.fused_expand = Conv2dNormActivation(
+            self.fused_expand = ConvNormActivation(
+                2,
                 cnf.input_channels,
                 cnf.out_channels,
                 kernel_size=cnf.kernel,
@@ -406,7 +332,7 @@ class Classifier(eqx.Module):
 
 
 class EfficientNet(eqx.Module):
-    features: list[Conv2dNormActivation | MBConv | FusedMBConv | InvertedResidualBlock]
+    features: list[ConvNormActivation | MBConv | FusedMBConv | InvertedResidualBlock]
     avgpool: eqx.nn.AdaptiveAvgPool2d
     classifier: Classifier
 
@@ -442,7 +368,8 @@ class EfficientNet(eqx.Module):
         firstconv_output_channels = inverted_residual_setting[0].input_channels
         self.features = []
         self.features.append(
-            Conv2dNormActivation(
+            ConvNormActivation(
+                2,
                 3,
                 firstconv_output_channels,
                 kernel_size=3,
@@ -486,7 +413,8 @@ class EfficientNet(eqx.Module):
         )
         key, subkey1, subkey2 = jax.random.split(key, 3)
         self.features.append(
-            Conv2dNormActivation(
+            ConvNormActivation(
+                2,
                 lastconv_input_channels,
                 lastconv_output_channels,
                 kernel_size=1,
