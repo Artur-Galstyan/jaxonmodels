@@ -10,6 +10,7 @@ dependencies = [
     "jax",
     "equinox",
     "pydantic",
+    "numpy",
     "jaxlib",
     "tqdm",
     "beartype",
