@@ -21,7 +21,7 @@ jobs:
           uv venv
           source .venv/bin/activate
           uv pip install -e . -U
-          uv pip install .[dev,test]
+          uv pip install .[dev,tests]
 
       - name: Install torch and torchvision explicitly
         run: |
