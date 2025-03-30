@@ -13,20 +13,11 @@ jobs:
         uses: actions/setup-python@v4
         with:
           python-version: "3.10"
-      - name: Install uv
-        uses: astral-sh/setup-uv@v5
-
-      - name: Install the project
+      - name: Install dependencies
         run: |
-          uv venv
-          source .venv/bin/activate
-          uv pip install -e . -U
-          uv pip install .[dev,tests]
-
-      - name: Install torch and torchvision explicitly
-        run: |
-          uv pip install torch==2.2.0 torchvision==0.17.0
+          python -m pip install --upgrade pip
+          pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+          pip install -e .[dev,tests]
       - name: Run tests
         run: |
-          source .venv/bin/activate
-          python3 -m pytest tests --jaxtyping-packages=jaxonmodels,beartype.beartype
+          python -m pytest tests --jaxtyping-packages=jaxonmodels,beartype.beartype
