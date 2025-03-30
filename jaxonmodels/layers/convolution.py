@@ -6,7 +6,6 @@ from jaxtyping import Array, Float, PRNGKeyArray
 from jaxonmodels.functions import (
     make_ntuple,
 )
-from jaxonmodels.layers import BatchNorm
 
 
 class ConvNormActivation(eqx.Module):
@@ -23,12 +22,12 @@ class ConvNormActivation(eqx.Module):
         stride: int | Sequence[int] = 1,
         padding: str | int | Sequence[int] | Sequence[tuple[int, int]] | None = None,
         groups: int = 1,
-        norm_layer: Callable[..., eqx.Module] | None = BatchNorm,
         activation_layer: Callable[..., Array] | None = jax.nn.relu,
         dilation: int | Sequence[int] = 1,
         use_bias: bool | None = None,
         axis_name: str = "batch",
         *,
+        norm_layer: Callable[..., eqx.Module] | None,
         key: PRNGKeyArray,
         dtype: Any,
     ):
@@ -67,10 +66,7 @@ class ConvNormActivation(eqx.Module):
 
         self.norm = None
         if norm_layer is not None:
-            if norm_layer is BatchNorm:
-                self.norm = norm_layer(out_channels, axis_name=axis_name, dtype=dtype)
-            else:
-                self.norm = norm_layer(out_channels, axis_name=axis_name, dtype=dtype)
+            self.norm = norm_layer(out_channels, axis_name=axis_name, dtype=dtype)
 
         if activation_layer is not None:
             self.activation = eqx.nn.Lambda(activation_layer)

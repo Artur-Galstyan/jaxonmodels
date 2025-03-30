@@ -13,9 +13,8 @@ from torchvision.ops.misc import Conv2dNormActivation as TorchConv2dNormActivati
 from torchvision.ops.misc import SqueezeExcitation as TorchSqueezeExcitation
 
 from jaxonmodels.functions.utils import default_floating_dtype
-from jaxonmodels.layers import BatchNorm, SqueezeExcitation
+from jaxonmodels.layers import BatchNorm, ConvNormActivation, SqueezeExcitation
 from jaxonmodels.models.efficientnet import (
-    Conv2dNormActivation,
     MBConv,
     MBConvConfig,
 )
@@ -50,7 +49,8 @@ def test_Conv2dNormActivation_parametrized(
     key = jax.random.key(42)
 
     # Create JAX version
-    jax_conv2d_norm_act, state = eqx.nn.make_with_state(Conv2dNormActivation)(
+    jax_conv2d_norm_act, state = eqx.nn.make_with_state(ConvNormActivation)(
+        2,
         in_channels,
         out_channels,
         kernel_size=kernel_size,
@@ -131,7 +131,8 @@ def test_Conv2dNormActivation_groups(
     key = jax.random.key(42)
 
     # Create JAX version
-    jax_conv2d_norm_act, state = eqx.nn.make_with_state(Conv2dNormActivation)(
+    jax_conv2d_norm_act, state = eqx.nn.make_with_state(ConvNormActivation)(
+        2,
         in_channels,
         out_channels,
         kernel_size=kernel_size,
