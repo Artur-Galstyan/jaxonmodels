@@ -347,7 +347,6 @@ class EfficientNet(eqx.Module):
         key: PRNGKeyArray,
         dtype: Any | None = None,  # Added optional dtype parameter
     ):
-        # Determine default dtype if not provided
         if dtype is None:
             dtype = default_floating_dtype()
         assert dtype is not None
