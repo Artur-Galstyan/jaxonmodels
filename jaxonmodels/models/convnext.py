@@ -3,13 +3,13 @@ import jax
 import jax.numpy as jnp
 from beartype.typing import Any
 from equinox.nn import LayerNorm
-from jaxtyping import Array, Float, PRNGKeyArray, Shaped
+from jaxtyping import Array, Float, PRNGKeyArray
 
 from jaxonmodels.layers import StochasticDepth
 
 
 class CNBlock(eqx.Module):
-    layer_scale: Shaped[Array, "dim 1 1"]
+    layer_scale: Array
     dwconv: eqx.nn.Conv2d
     norm: eqx.Module
     pwconv1: eqx.nn.Linear
@@ -19,7 +19,7 @@ class CNBlock(eqx.Module):
     def __init__(
         self,
         dim: int,
-        layer_scale_init_value: float,
+        layer_scale: float,
         stochastic_depth_prob: float,
         norm_layer,
         *,
@@ -28,7 +28,7 @@ class CNBlock(eqx.Module):
     ) -> None:
         key, *keys = jax.random.split(key, 5)
 
-        self.layer_scale = jnp.ones((dim, 1, 1), dtype=dtype) * layer_scale_init_value
+        self.layer_scale = jnp.ones((dim, 1, 1), dtype=dtype) * layer_scale
         self.dwconv = eqx.nn.Conv2d(
             in_channels=dim,
             out_channels=dim,
@@ -43,6 +43,8 @@ class CNBlock(eqx.Module):
             self.norm = LayerNorm(shape=dim, eps=1e-6)
         else:
             self.norm = norm_layer(shape=dim, eps=1e-6)
+
+        assert self.norm is not None
 
         self.pwconv1 = eqx.nn.Linear(
             in_features=dim,
@@ -67,32 +69,15 @@ class CNBlock(eqx.Module):
         inference: bool,
         key: PRNGKeyArray,
     ) -> Float[Array, "c h w"]:
-        print("JAX START")
-        print(x.shape)
         residual = x
         x = self.dwconv(x)
         x = jnp.transpose(x, (1, 2, 0))
-        print(x.shape)
         x = eqx.filter_vmap(eqx.filter_vmap(self.norm))(x)  # pyright: ignore
-        print(x.shape)
-        x = self.dwconv(x)
-        print(x.shape)
-        x = eqx.filter_vmap(self.norm)(x)  # pyright: ignore
-        print(x.shape)
-        x = self.pwconv1(x)
-        print(x.shape)
+        x = eqx.filter_vmap(eqx.filter_vmap(self.pwconv1))(x)
         x = jax.nn.gelu(x)
-        print(x.shape)
-        x = self.pwconv2(x)
-        print(x.shape)
-
+        x = eqx.filter_vmap(eqx.filter_vmap(self.pwconv2))(x)
+        x = jnp.transpose(x, (2, 0, 1))
         x = self.layer_scale * x
-        print(x.shape)
-
         x = self.stochastic_depth(x, key=key, inference=inference)
-        print(x.shape)
-
         x = x + residual
-        print(x.shape)
-        print("JAX END")
         return x

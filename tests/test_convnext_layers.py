@@ -18,7 +18,7 @@ from jaxonmodels.statedict2pytree.s2p import (
 
 
 def test_cnblock_equivalence():
-    batch_size = 1
+    batch_size = 4
     dim = 128
     layer_scale = 1e-06
     stochastic_depth_prob = 0.0
@@ -70,11 +70,5 @@ def test_cnblock_equivalence():
     jax_infer_func = functools.partial(jax_block, inference=True, key=vmap_key)
     jax_output = eqx.filter_vmap(jax_infer_func)(jax_input)
 
-    # # 5. Compare
-    # assert jax_output.shape == torch_output.shape, (
-    #     f"Shape mismatch: JAX {jax_output.shape}, Torch {torch_output.shape}"
-    # )
-    # # Use a slightly higher tolerance for potential float32 variations across libraries/ops
-    # assert np.allclose(np.array(jax_output), torch_output.numpy(), atol=1e-5), (
-    #     f"Mismatch for dim={dim}, size={img_size}, sd={stochastic_depth_prob}"
-    # )
+    assert jax_output.shape == torch_output.shape
+    assert np.allclose(np.array(jax_output), torch_output.numpy(), atol=1e-5)
