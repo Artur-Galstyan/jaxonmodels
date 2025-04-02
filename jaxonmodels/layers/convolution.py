@@ -1,6 +1,7 @@
 import equinox as eqx
 import jax
 from beartype.typing import Any, Callable, Sequence
+from equinox.nn import BatchNorm, StatefulLayer
 from jaxtyping import Array, Float, PRNGKeyArray
 
 from jaxonmodels.functions import (
@@ -8,7 +9,7 @@ from jaxonmodels.functions import (
 )
 
 
-class ConvNormActivation(eqx.Module):
+class ConvNormActivation(StatefulLayer):
     conv: eqx.nn.Conv
     norm: eqx.Module | None
     activation: eqx.nn.Lambda | None
@@ -66,7 +67,10 @@ class ConvNormActivation(eqx.Module):
 
         self.norm = None
         if norm_layer is not None:
-            self.norm = norm_layer(out_channels, axis_name=axis_name, dtype=dtype)
+            if norm_layer == BatchNorm:
+                self.norm = norm_layer(out_channels, axis_name=axis_name, dtype=dtype)
+            else:
+                self.norm = norm_layer(out_channels, dtype=dtype)
 
         if activation_layer is not None:
             self.activation = eqx.nn.Lambda(activation_layer)
@@ -76,10 +80,13 @@ class ConvNormActivation(eqx.Module):
     def __call__(
         self,
         x: Float[Array, "c *num_spatial_dims"],
-        state: eqx.nn.State,
-        inference: bool,
+        state: eqx.nn.State | None,
+        inference: bool | None,
         key: PRNGKeyArray | None = None,
-    ) -> tuple[Float[Array, "c_out *num_spatial_dims_out"], eqx.nn.State]:
+    ) -> (
+        Float[Array, "c_out *num_spatial_dims_out"]
+        | tuple[Float[Array, "c_out *num_spatial_dims_out"], eqx.nn.State]
+    ):
         x = self.conv(x)
 
         if self.norm:

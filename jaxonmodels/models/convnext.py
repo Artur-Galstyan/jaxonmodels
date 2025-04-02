@@ -1,13 +1,30 @@
+import os
+from pathlib import Path
+from urllib.request import urlretrieve
+
 import equinox as eqx
 import jax
 import jax.numpy as jnp
-from beartype.typing import Any, Callable, Sequence
+from beartype.typing import Any, Callable, Literal, Sequence
 from equinox.nn import LayerNorm
 from jaxtyping import Array, Float, PRNGKeyArray
 
-from jaxonmodels.functions.utils import default_floating_dtype
+from jaxonmodels.functions import default_floating_dtype, dtype_to_str
 from jaxonmodels.layers import ConvNormActivation, StochasticDepth
-from jaxonmodels.layers.sequential import Sequential
+from jaxonmodels.statedict2pytree.s2p import (
+    convert,
+    move_running_fields_to_the_end,
+    pytree_to_fields,
+    serialize_pytree,
+    state_dict_to_fields,
+)
+
+_MODELS = {
+    "convnext_tiny_IMAGENET1K_V1": "https://download.pytorch.org/models/convnext_tiny-983f1562.pth",
+    "convnext_small_IMAGENET1K_V1": "https://download.pytorch.org/models/convnext_small-0c510722.pth",
+    "convnext_base_IMAGENET1K_V1": "https://download.pytorch.org/models/convnext_base-6075fbad.pth",
+    "convnext_large_IMAGENET1K_V1": "https://download.pytorch.org/models/convnext_large-ea097f82.pth",
+}
 
 
 class CNBlockConfig:
@@ -107,8 +124,9 @@ class CNBlock(eqx.Module):
 
 
 class ConvNeXt(eqx.Module):
-    features: Sequential
+    features: eqx.nn.Sequential
     avgpool: eqx.nn.AdaptiveAvgPool2d
+    classifier: eqx.nn.Sequential
 
     def __init__(
         self,
@@ -166,7 +184,7 @@ class ConvNeXt(eqx.Module):
         for cnf in block_setting:
             # Bottlenecks
             stage: list[eqx.Module] = []
-            key, *subkeys = jax.random.split(key, cnf.num_layers)
+            key, *subkeys = jax.random.split(key, cnf.num_layers + 5)
             for i in range(cnf.num_layers):
                 sd_prob = (
                     stochastic_depth_prob * stage_block_id / (total_stage_blocks - 1.0)
@@ -182,14 +200,14 @@ class ConvNeXt(eqx.Module):
                     )
                 )
                 stage_block_id += 1
-            layers.append(Sequential(stage))
+            layers.append(eqx.nn.Sequential(stage))  # pyright: ignore
             if cnf.out_channels is not None:
                 # Downsampling
                 key, subkey = jax.random.split(key)
                 layers.append(
-                    Sequential(
+                    eqx.nn.Sequential(
                         [
-                            norm_layer(cnf.input_channels),
+                            norm_layer(cnf.input_channels),  # pyright: ignore
                             eqx.nn.Conv2d(
                                 cnf.input_channels,
                                 cnf.out_channels,
@@ -202,7 +220,7 @@ class ConvNeXt(eqx.Module):
                     )
                 )
 
-        self.features = Sequential(layers)
+        self.features = eqx.nn.Sequential(layers)  # pyright: ignore
         self.avgpool = eqx.nn.AdaptiveAvgPool2d(1)
 
         lastblock = block_setting[-1]
@@ -212,9 +230,9 @@ class ConvNeXt(eqx.Module):
             else lastblock.input_channels
         )
         key, subkey = jax.random.split(key)
-        self.classifier = Sequential(
+        self.classifier = eqx.nn.Sequential(
             [
-                norm_layer(lastconv_output_channels, dtype=dtype),
+                norm_layer(lastconv_output_channels, dtype=dtype),  # pyright: ignore
                 eqx.nn.Lambda(lambda x: jnp.ravel(x)),
                 eqx.nn.Linear(
                     lastconv_output_channels, num_classes, key=subkey, dtype=dtype
@@ -223,3 +241,295 @@ class ConvNeXt(eqx.Module):
         )
 
         # todo: init properly
+
+    def __call__(
+        self,
+        x: Array,
+        key: PRNGKeyArray,
+        *,
+        state: eqx.nn.State | None = None,
+    ):
+        # todo: Handle state if norm_layer is stateful
+        key, *subkeys = jax.random.split(key, 3)
+        x = self.features(x, key=subkeys[0])
+        x = self.avgpool(x, key=subkeys[1])
+        x = self.classifier(x, key=subkeys[2])
+        return x
+
+
+def _convnext_tiny(key, num_classes=1000, dtype: Any = None):
+    """Creates a ConvNeXt Tiny model."""
+    if dtype is None:
+        dtype = default_floating_dtype()
+    assert dtype is not None
+
+    block_setting = [
+        CNBlockConfig(96, 192, 3),
+        CNBlockConfig(192, 384, 3),
+        CNBlockConfig(384, 768, 9),
+        CNBlockConfig(768, None, 3),
+    ]
+
+    model = ConvNeXt(
+        block_setting=block_setting,
+        stochastic_depth_prob=0.1,
+        num_classes=num_classes,
+        key=key,
+        dtype=dtype,
+    )
+
+    return model
+
+
+def _convnext_small(key, num_classes=1000, dtype: Any = None):
+    """Creates a ConvNeXt Small model."""
+    if dtype is None:
+        dtype = default_floating_dtype()
+    assert dtype is not None
+
+    block_setting = [
+        CNBlockConfig(96, 192, 3),
+        CNBlockConfig(192, 384, 3),
+        CNBlockConfig(384, 768, 27),
+        CNBlockConfig(768, None, 3),
+    ]
+
+    model = ConvNeXt(
+        block_setting=block_setting,
+        stochastic_depth_prob=0.4,
+        num_classes=num_classes,
+        key=key,
+        dtype=dtype,
+    )
+
+    return model
+
+
+def _convnext_base(key, num_classes=1000, dtype: Any = None):
+    """Creates a ConvNeXt Base model."""
+    if dtype is None:
+        dtype = default_floating_dtype()
+    assert dtype is not None
+
+    block_setting = [
+        CNBlockConfig(128, 256, 3),
+        CNBlockConfig(256, 512, 3),
+        CNBlockConfig(512, 1024, 27),
+        CNBlockConfig(1024, None, 3),
+    ]
+
+    model = ConvNeXt(
+        block_setting=block_setting,
+        stochastic_depth_prob=0.5,
+        num_classes=num_classes,
+        key=key,
+        dtype=dtype,
+    )
+
+    return model
+
+
+def _convnext_large(key, num_classes=1000, dtype: Any = None):
+    """Creates a ConvNeXt Large model."""
+    if dtype is None:
+        dtype = default_floating_dtype()
+    assert dtype is not None
+
+    block_setting = [
+        CNBlockConfig(192, 384, 3),
+        CNBlockConfig(384, 768, 3),
+        CNBlockConfig(768, 1536, 27),
+        CNBlockConfig(1536, None, 3),
+    ]
+
+    model = ConvNeXt(
+        block_setting=block_setting,
+        stochastic_depth_prob=0.5,
+        num_classes=num_classes,
+        key=key,
+        dtype=dtype,
+    )
+
+    return model
+
+
+def _with_weights(
+    model,
+    weights: str,
+    cache: bool,
+    dtype: Any,
+):
+    """Load pre-trained weights for the model."""
+    dtype_str = dtype_to_str(dtype)
+
+    weights_url = _MODELS.get(weights)
+    if weights_url is None:
+        raise ValueError(f"No weights found for {weights}")
+
+    # Create directories for caching
+    jaxonmodels_dir = os.path.expanduser("~/.jaxonmodels/models")
+    os.makedirs(jaxonmodels_dir, exist_ok=True)
+
+    # Define cache file path including dtype
+    cache_filename = f"{weights}-{dtype_str}.eqx"
+    cache_filepath = str(Path(jaxonmodels_dir) / cache_filename)
+
+    # Check if cached model exists
+    if cache:
+        if os.path.exists(cache_filepath):
+            return eqx.tree_deserialise_leaves(
+                cache_filepath,
+                model,
+            )
+
+    # Download weights if not already downloaded
+    weights_dir = os.path.expanduser("~/.jaxonmodels/pytorch_weights")
+    os.makedirs(weights_dir, exist_ok=True)
+    filename = weights_url.split("/")[-1]
+    weights_file = os.path.join(weights_dir, filename)
+    if not os.path.exists(weights_file):
+        print(f"Downloading weights from {weights_url} to {weights_file}")
+        urlretrieve(weights_url, weights_file)
+    else:
+        print(f"Using existing weights file: {weights_file}")
+
+    # Load PyTorch weights
+    import torch
+
+    print("Loading PyTorch state dict...")
+    weights_dict = torch.load(
+        weights_file,
+        map_location=torch.device("cpu"),  # weights_only=True removed for compatibility
+    )
+    # If it's a checkpoint dict, extract the state_dict
+    if not isinstance(weights_dict, dict):
+        # Try loading as a JIT model like in CLIP if simple load fails
+        try:
+            torch_model = torch.jit.load(weights_file, map_location=torch.device("cpu"))
+            temp_dict = {}
+            for name, param in torch_model.named_parameters():
+                temp_dict[name] = param.clone().detach()
+            for name, buffer in torch_model.named_buffers():
+                temp_dict[name] = buffer.clone().detach()
+            weights_dict = temp_dict
+            print("Loaded weights from TorchScript model.")
+        except Exception as e:
+            raise TypeError(
+                f"Could not load weights. "
+                f"Expected state_dict but got {type(weights_dict)}. "
+                f"JIT load failed with: {e}"
+            )
+    elif "state_dict" in weights_dict:
+        weights_dict = weights_dict["state_dict"]
+
+    print("Converting PyTorch weights to JAX format...")
+    # Convert PyTorch weights to JAX format
+    torchfields = state_dict_to_fields(weights_dict)
+    torchfields = move_running_fields_to_the_end(torchfields)
+    jaxfields, state_indices = pytree_to_fields(model)
+
+    model = convert(
+        weights_dict,
+        model,
+        jaxfields,
+        state_indices,
+        torchfields,
+        dtype=dtype,
+    )
+
+    if cache:
+        serialize_pytree(model, cache_filepath)
+
+    return model
+
+
+def _assert_model_and_weights_fit(
+    model: Literal[
+        "convnext_tiny",
+        "convnext_small",
+        "convnext_base",
+        "convnext_large",
+    ],
+    weights: Literal[
+        "convnext_tiny_IMAGENET1K_V1",
+        "convnext_small_IMAGENET1K_V1",
+        "convnext_base_IMAGENET1K_V1",
+        "convnext_large_IMAGENET1K_V1",
+    ],
+):
+    """Ensures the model and weights are compatible."""
+    if "_" in weights:
+        weights_model = weights.split("_IMAGENET")[0].lower()
+
+        # Check if the specified weights are compatible with the model
+        if weights_model != model:
+            raise ValueError(
+                f"Model {model} is incompatible with weights {weights}. "
+                f"Expected weights starting with '{model}'."
+            )
+
+
+def load_convnext(
+    model: Literal[
+        "convnext_tiny",
+        "convnext_small",
+        "convnext_base",
+        "convnext_large",
+    ],
+    weights: Literal[
+        "convnext_tiny_IMAGENET1K_V1",
+        "convnext_small_IMAGENET1K_V1",
+        "convnext_base_IMAGENET1K_V1",
+        "convnext_large_IMAGENET1K_V1",
+    ]
+    | None = None,
+    num_classes: int = 1000,
+    cache: bool = True,
+    *,
+    key: PRNGKeyArray | None = None,
+    dtype: Any = None,
+) -> ConvNeXt:
+    """
+    Load a ConvNeXt model with optional pre-trained weights.
+
+    Args:
+        model: The name of the ConvNeXt model to load
+        weights: The name of the weights to load (from _MODELS), or None for random init
+        num_classes: Number of output classes
+        cache: Whether to cache the model and weights.
+        key: Random key for initialization. Defaults to jax.random.key(42).
+        dtype: The data type for the model's parameters (e.g., jnp.float32).
+               Defaults to jaxonmodels.functions.default_floating_dtype().
+
+    Returns:
+        A ConvNeXt model
+    """
+    if key is None:
+        key = jax.random.key(42)
+
+    # Determine default dtype if not provided before passing to constructors
+    if dtype is None:
+        dtype = default_floating_dtype()
+    assert dtype is not None  # Ensure dtype is set
+
+    convnext = None
+
+    match model:
+        case "convnext_tiny":
+            convnext = _convnext_tiny(key, num_classes, dtype=dtype)
+        case "convnext_small":
+            convnext = _convnext_small(key, num_classes, dtype=dtype)
+        case "convnext_base":
+            convnext = _convnext_base(key, num_classes, dtype=dtype)
+        case "convnext_large":
+            convnext = _convnext_large(key, num_classes, dtype=dtype)
+        case _:
+            raise ValueError(f"Unknown model name: {model}")
+
+    if weights:
+        _assert_model_and_weights_fit(model, weights)
+        convnext = _with_weights(convnext, weights, cache, dtype=dtype)
+
+    assert convnext is not None
+
+    return convnext
