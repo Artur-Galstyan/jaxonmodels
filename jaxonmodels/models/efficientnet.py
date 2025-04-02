@@ -134,6 +134,7 @@ class MBConv(eqx.Module):
         stochastic_depth_prob: float,
         key: PRNGKeyArray,
         dtype: Any,
+        axis_name: str = "batch",
     ):
         if not (1 <= cnf.stride <= 2):
             raise ValueError("illegal stride value")
@@ -154,7 +155,9 @@ class MBConv(eqx.Module):
                 cnf.input_channels,
                 expanded_channels,
                 kernel_size=1,
-                norm_layer=BatchNorm,
+                norm_layer=functools.partial(
+                    BatchNorm, axis_name=axis_name, dtype=dtype
+                ),
                 activation_layer=activation_layer,
                 key=subkey,
                 dtype=dtype,
@@ -169,7 +172,7 @@ class MBConv(eqx.Module):
             kernel_size=cnf.kernel,
             stride=cnf.stride,
             groups=expanded_channels,
-            norm_layer=BatchNorm,
+            norm_layer=functools.partial(BatchNorm, axis_name=axis_name, dtype=dtype),
             activation_layer=activation_layer,
             key=subkey,
             dtype=dtype,
@@ -188,7 +191,7 @@ class MBConv(eqx.Module):
             expanded_channels,
             cnf.out_channels,
             kernel_size=1,
-            norm_layer=BatchNorm,
+            norm_layer=functools.partial(BatchNorm, axis_name=axis_name, dtype=dtype),
             activation_layer=None,
             key=subkey,
             dtype=dtype,
@@ -196,19 +199,19 @@ class MBConv(eqx.Module):
         self.stochastic_depth = StochasticDepth(stochastic_depth_prob, "row")
 
     def __call__(
-        self, x: Array, state: eqx.nn.State, inference: bool, key: PRNGKeyArray
+        self, x: Array, state: eqx.nn.State, key: PRNGKeyArray
     ) -> tuple[Array, eqx.nn.State]:
         if self.expand_conv2d:
-            result, state = self.expand_conv2d(x, state, inference)
+            result, state = self.expand_conv2d(x, state)
         else:
             result = x
-        result, state = self.depthwise_conv2d(result, state, inference)
+        result, state = self.depthwise_conv2d(result, state)
         result = self.se_layer(result, activation=jax.nn.silu)
 
-        result, state = self.project_conv2d(result, state, inference)
+        result, state = self.project_conv2d(result, state)
 
         if self.use_res_connect:
-            result = self.stochastic_depth(result, inference=inference, key=key)
+            result = self.stochastic_depth(result, key=key)
             result += x
         return result, state
 
@@ -226,6 +229,7 @@ class FusedMBConv(eqx.Module):
         stochastic_depth_prob: float,
         key: PRNGKeyArray,
         dtype: Any,
+        axis_name: str = "batch",
     ):
         if not (1 <= cnf.stride <= 2):
             raise ValueError("illegal stride value")
@@ -245,7 +249,9 @@ class FusedMBConv(eqx.Module):
                 expanded_channels,
                 kernel_size=cnf.kernel,
                 stride=cnf.stride,
-                norm_layer=BatchNorm,
+                norm_layer=functools.partial(
+                    BatchNorm, axis_name=axis_name, dtype=dtype
+                ),
                 activation_layer=jax.nn.silu,
                 key=subkey,
                 dtype=dtype,
@@ -257,7 +263,9 @@ class FusedMBConv(eqx.Module):
                 expanded_channels,
                 cnf.out_channels,
                 kernel_size=1,
-                norm_layer=BatchNorm,
+                norm_layer=functools.partial(
+                    BatchNorm, axis_name=axis_name, dtype=dtype
+                ),
                 activation_layer=None,
                 key=subkey2,
                 dtype=dtype,
@@ -270,7 +278,9 @@ class FusedMBConv(eqx.Module):
                 cnf.out_channels,
                 kernel_size=cnf.kernel,
                 stride=cnf.stride,
-                norm_layer=BatchNorm,
+                norm_layer=functools.partial(
+                    BatchNorm, axis_name=axis_name, dtype=dtype
+                ),
                 activation_layer=jax.nn.silu,
                 key=subkey,
                 dtype=dtype,
@@ -280,15 +290,15 @@ class FusedMBConv(eqx.Module):
         self.stochastic_depth = StochasticDepth(stochastic_depth_prob, "row")
 
     def __call__(
-        self, x: Array, state: eqx.nn.State, inference: bool, key: PRNGKeyArray
+        self, x: Array, state: eqx.nn.State, *, key: PRNGKeyArray
     ) -> tuple[Array, eqx.nn.State]:
-        result, state = self.fused_expand(x, state, inference)
+        result, state = self.fused_expand(x, state)
 
         if self.project:
-            result, state = self.project(result, state, inference)
+            result, state = self.project(result, state)
 
         if self.use_res_connect:
-            result = self.stochastic_depth(result, inference, key)
+            result = self.stochastic_depth(result, key=key)
             result += x
         return result, state
 
@@ -300,11 +310,11 @@ class InvertedResidualBlock(eqx.Module):
         self.layers = layers
 
     def __call__(
-        self, x: Array, state: eqx.nn.State, inference: bool, key: PRNGKeyArray
+        self, x: Array, state: eqx.nn.State, key: PRNGKeyArray
     ) -> tuple[Array, eqx.nn.State]:
         keys = jax.random.split(key, len(self.layers) + 1)
         for i, stage in enumerate(self.layers):
-            x, state = stage(x, state, inference, keys[i])
+            x, state = stage(x, state, key=keys[i])
 
         return x, state
 
@@ -444,7 +454,7 @@ class EfficientNet(eqx.Module):
         classifier_key = keys[-1]
 
         for i, feature in enumerate(self.features):
-            x, state = feature(x, state, inference, feature_keys[i])
+            x, state = feature(x, state, key=feature_keys[i])
 
         x = self.avgpool(x)
         x = jnp.ravel(x)
