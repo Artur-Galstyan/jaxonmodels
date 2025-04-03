@@ -1,14 +1,13 @@
 import equinox as eqx
 import jax
 from beartype.typing import Any, Callable, Sequence
+from equinox.nn import StatefulLayer
 from jaxtyping import Array, Float, PRNGKeyArray
 
-from jaxonmodels.functions import (
-    make_ntuple,
-)
+from jaxonmodels.functions import make_ntuple
 
 
-class ConvNormActivation(eqx.Module):
+class ConvNormActivation(StatefulLayer):
     conv: eqx.nn.Conv
     norm: eqx.Module | None
     activation: eqx.nn.Lambda | None
@@ -25,7 +24,6 @@ class ConvNormActivation(eqx.Module):
         activation_layer: Callable[..., Array] | None = jax.nn.relu,
         dilation: int | Sequence[int] = 1,
         use_bias: bool | None = None,
-        axis_name: str = "batch",
         *,
         norm_layer: Callable[..., eqx.Module] | None,
         key: PRNGKeyArray,
@@ -66,7 +64,7 @@ class ConvNormActivation(eqx.Module):
 
         self.norm = None
         if norm_layer is not None:
-            self.norm = norm_layer(out_channels, axis_name=axis_name, dtype=dtype)
+            self.norm = norm_layer()
 
         if activation_layer is not None:
             self.activation = eqx.nn.Lambda(activation_layer)
@@ -77,15 +75,22 @@ class ConvNormActivation(eqx.Module):
         self,
         x: Float[Array, "c *num_spatial_dims"],
         state: eqx.nn.State,
-        inference: bool,
         key: PRNGKeyArray | None = None,
     ) -> tuple[Float[Array, "c_out *num_spatial_dims_out"], eqx.nn.State]:
         x = self.conv(x)
 
         if self.norm:
-            x, state = self.norm(x, state, inference=inference)  # pyright: ignore
+            x, state = self.norm(x, state)  # pyright: ignore
 
         if self.activation:
             x = self.activation(x)
 
         return x, state
+
+    def is_stateful(self) -> bool:
+        if self.norm is None:
+            return False
+        if isinstance(self.norm, StatefulLayer) and self.norm.is_stateful():
+            return True
+        else:
+            return False

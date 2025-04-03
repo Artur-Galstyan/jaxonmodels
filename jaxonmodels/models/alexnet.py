@@ -38,9 +38,17 @@ class AlexNet(eqx.Module):
 
     final: eqx.nn.Linear
 
+    inference: bool
+
     def __init__(
-        self, *, n_classes: int, key: jt.PRNGKeyArray, dtype: Any | None = None
+        self,
+        *,
+        n_classes: int,
+        key: jt.PRNGKeyArray,
+        inference: bool = False,
+        dtype: Any | None = None,
     ):
+        self.inference = inference
         _, *subkeys = jax.random.split(key, 10)
         self.conv1 = eqx.nn.Conv2d(
             in_channels=3,
@@ -112,9 +120,8 @@ class AlexNet(eqx.Module):
         self,
         x: jt.Float[jt.Array, "c h w"],
         key: jt.PRNGKeyArray | None = None,
-        inference: bool = False,
     ) -> jt.Array:
-        if inference:
+        if self.inference:
             key, subkey = None, None
         else:
             if not key:
@@ -142,10 +149,10 @@ class AlexNet(eqx.Module):
 
         x = self.dense1(x)
         x = jax.nn.relu(x)
-        x = self.dropout1(x, key=key, inference=inference)
+        x = self.dropout1(x, key=key)
         x = self.dense2(x)
         x = jax.nn.relu(x)
-        x = self.dropout2(x, key=subkey, inference=inference)
+        x = self.dropout2(x, key=subkey)
 
         x = self.final(x)
         return x

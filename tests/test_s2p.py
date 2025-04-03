@@ -1,5 +1,3 @@
-import functools as ft
-
 import equinox as eqx
 import jax
 import jax.numpy as jnp
@@ -25,7 +23,10 @@ def test_conversion():
         linear1: eqx.nn.Linear
         linear2: eqx.nn.Linear
 
+        inference: bool
+
         def __init__(self):
+            self.inference = False
             # First conv layer: (3, 8) -> (6, 8)
             self.conv1 = eqx.nn.Conv1d(
                 in_channels=3,
@@ -59,12 +60,10 @@ def test_conversion():
                 in_features=24, out_features=16, key=jax.random.key(4)
             )
 
-        def __call__(
-            self, x: Float[Array, "3 8"], state: eqx.nn.State, inference: bool = False
-        ):
+        def __call__(self, x: Float[Array, "3 8"], state: eqx.nn.State):
             # First conv block
             x = self.conv1(x)
-            x, state = self.norm1(x, state, inference=inference)
+            x, state = self.norm1(x, state)
             x = jax.nn.relu(x)
 
             # Second conv block
@@ -153,9 +152,10 @@ def test_conversion():
 
     torch_model.eval()
     torch_output = torch_model.forward(torch.Tensor(test_input))
+    jax_model, state = eqx.nn.inference_mode((jax_model, state), value=True)
 
     jax_output, state = eqx.filter_vmap(
-        ft.partial(jax_model, inference=True),
+        jax_model,
         in_axes=(0, None),
         out_axes=(0, None),
         axis_name="batch",
@@ -167,9 +167,10 @@ def test_conversion():
 
     torch_model.train()
     torch_output = torch_model.forward(torch.Tensor(test_input))
+    jax_model, state = eqx.nn.inference_mode((jax_model, state), value=False)
 
     jax_output, state = eqx.filter_vmap(
-        ft.partial(jax_model, inference=False),
+        jax_model,
         in_axes=(0, None),
         out_axes=(0, None),
         axis_name="batch",
@@ -178,7 +179,7 @@ def test_conversion():
     assert np.allclose(np.array(jax_output), torch_output.detach().numpy(), atol=1e-5)
 
     jax_output, state = eqx.filter_vmap(
-        ft.partial(jax_model, inference=False),
+        jax_model,
         in_axes=(0, None),
         out_axes=(0, None),
         axis_name="batch",

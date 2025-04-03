@@ -56,7 +56,9 @@ def test_Conv2dNormActivation_parametrized(
         kernel_size=kernel_size,
         stride=stride,
         padding=padding,
-        norm_layer=norm_layer,
+        norm_layer=functools.partial(
+            norm_layer, axis_name="batch", size=out_channels, dtype=dtype
+        ),
         activation_layer=activation_layer,
         key=key,
         dtype=dtype,
@@ -92,6 +94,8 @@ def test_Conv2dNormActivation_parametrized(
         torchfields,
     )
 
+    jax_conv2d_norm_act, state = eqx.nn.inference_mode((jax_conv2d_norm_act, state))
+
     # Generate random input
     np.random.seed(42)
     input_height, input_width = 64, 64  # Example dimensions
@@ -103,9 +107,7 @@ def test_Conv2dNormActivation_parametrized(
     # Prepare models for inference
     torch_conv2d_norm_act.eval()
     key, subkey = jax.random.split(key)
-    jax_conv2d_norm_act_pt = functools.partial(
-        jax_conv2d_norm_act, inference=True, key=subkey
-    )
+    jax_conv2d_norm_act_pt = functools.partial(jax_conv2d_norm_act, key=subkey)
 
     # Run inference
     out_torch = torch_conv2d_norm_act.forward(torch.from_numpy(x))
@@ -138,7 +140,9 @@ def test_Conv2dNormActivation_groups(
         kernel_size=kernel_size,
         stride=stride,
         groups=groups,
-        norm_layer=BatchNorm,
+        norm_layer=functools.partial(
+            BatchNorm, axis_name="batch", size=out_channels, dtype=dtype
+        ),
         activation_layer=jax.nn.silu,
         key=key,
         dtype=dtype,
@@ -169,6 +173,8 @@ def test_Conv2dNormActivation_groups(
         torchfields,
     )
 
+    jax_conv2d_norm_act, state = eqx.nn.inference_mode((jax_conv2d_norm_act, state))
+
     # Generate random input
     np.random.seed(42)
     input_height, input_width = 32, 32  # Example dimensions
@@ -180,9 +186,7 @@ def test_Conv2dNormActivation_groups(
     # Prepare models for inference
     torch_conv2d_norm_act.eval()
     key, subkey = jax.random.split(key)
-    jax_conv2d_norm_act_pt = functools.partial(
-        jax_conv2d_norm_act, inference=True, key=subkey
-    )
+    jax_conv2d_norm_act_pt = functools.partial(jax_conv2d_norm_act, key=subkey)
 
     # Run inference
     out_torch = torch_conv2d_norm_act.forward(torch.from_numpy(x))
@@ -306,12 +310,15 @@ def test_mbconv_forward(
         state_indices,
         torchfields,
     )
+
+    jax_mbconv, state = eqx.nn.inference_mode((jax_mbconv, state))
+
     np.random.seed(42)
     x = np.array(
         np.random.normal(size=(2, input_channels, height, width)), dtype=np.float32
     )
     key, subkey = jax.random.split(key)
-    jax_mbconv_pt = functools.partial(jax_mbconv, inference=True, key=subkey)
+    jax_mbconv_pt = functools.partial(jax_mbconv, key=subkey)
     torch_mbconv.eval()
 
     jax_output, state = eqx.filter_vmap(
