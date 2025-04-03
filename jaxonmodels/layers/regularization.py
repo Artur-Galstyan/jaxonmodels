@@ -9,7 +9,7 @@ from jaxonmodels.functions import (
 class StochasticDepth(eqx.Module):
     p: float = eqx.field(static=True)
     mode: str = eqx.field(static=True)
-    inference: bool = eqx.field(static=True)
+    inference: bool
 
     def __init__(self, p: float, mode: str, inference: bool = False) -> None:
         self.p = p

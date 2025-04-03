@@ -1,5 +1,6 @@
 import os
 
+import equinox as eqx
 import jax
 import jax.numpy as jnp
 import requests
@@ -45,8 +46,9 @@ jax_input = preprocess_image(image_path)[0]
 
 
 anet = alexnet(with_weights=True, dtype=jnp.float16)
+anet = eqx.nn.inference_mode(anet)
 print(anet.conv2.weight.dtype)
-jax_output = anet(jnp.array(jax_input, dtype=jnp.float16), inference=True)
+jax_output = anet(jnp.array(jax_input, dtype=jnp.float16))
 jax_probs = jax.nn.softmax(jax_output)
 
 # Get top predictions

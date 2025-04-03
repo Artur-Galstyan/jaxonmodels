@@ -34,6 +34,8 @@ class MultiheadAttention(eqx.Module):
     head_dim: int = eqx.field(static=True)
     add_zero_attn: bool = eqx.field(static=True)
 
+    inference: bool
+
     def __init__(
         self,
         embed_dim,
@@ -44,10 +46,12 @@ class MultiheadAttention(eqx.Module):
         add_zero_attn=False,
         kdim=None,
         vdim=None,
+        inference: bool = False,
         *,
         key: PRNGKeyArray,
         dtype: Any | None = None,
     ) -> None:
+        self.inference = inference
         if dtype is None:
             dtype = default_floating_dtype()
         assert dtype is not None
@@ -127,7 +131,6 @@ class MultiheadAttention(eqx.Module):
         attn_mask: Array | None = None,
         average_attn_weights: bool = True,
         is_causal: bool = False,
-        inference: bool = False,
     ) -> tuple[Array, Array | None]:
         key_padding_mask = canonical_mask(
             mask=key_padding_mask,
@@ -158,7 +161,7 @@ class MultiheadAttention(eqx.Module):
                 self.dropout,
                 self.out_proj.weight,
                 self.out_proj.bias,
-                inference=inference,
+                inference=self.inference,
                 key_padding_mask=key_padding_mask,
                 need_weights=need_weights,
                 attn_mask=attn_mask,
@@ -184,7 +187,7 @@ class MultiheadAttention(eqx.Module):
                 self.dropout,
                 self.out_proj.weight,
                 self.out_proj.bias,
-                inference=inference,
+                inference=self.inference,
                 key_padding_mask=key_padding_mask,
                 need_weights=need_weights,
                 attn_mask=attn_mask,

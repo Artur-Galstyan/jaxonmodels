@@ -156,7 +156,7 @@ class MBConv(eqx.Module):
                 expanded_channels,
                 kernel_size=1,
                 norm_layer=functools.partial(
-                    BatchNorm, axis_name=axis_name, dtype=dtype
+                    BatchNorm, size=expanded_channels, axis_name=axis_name, dtype=dtype
                 ),
                 activation_layer=activation_layer,
                 key=subkey,
@@ -172,7 +172,9 @@ class MBConv(eqx.Module):
             kernel_size=cnf.kernel,
             stride=cnf.stride,
             groups=expanded_channels,
-            norm_layer=functools.partial(BatchNorm, axis_name=axis_name, dtype=dtype),
+            norm_layer=functools.partial(
+                BatchNorm, size=expanded_channels, axis_name=axis_name, dtype=dtype
+            ),
             activation_layer=activation_layer,
             key=subkey,
             dtype=dtype,
@@ -191,7 +193,9 @@ class MBConv(eqx.Module):
             expanded_channels,
             cnf.out_channels,
             kernel_size=1,
-            norm_layer=functools.partial(BatchNorm, axis_name=axis_name, dtype=dtype),
+            norm_layer=functools.partial(
+                BatchNorm, size=cnf.out_channels, axis_name=axis_name, dtype=dtype
+            ),
             activation_layer=None,
             key=subkey,
             dtype=dtype,
@@ -250,7 +254,7 @@ class FusedMBConv(eqx.Module):
                 kernel_size=cnf.kernel,
                 stride=cnf.stride,
                 norm_layer=functools.partial(
-                    BatchNorm, axis_name=axis_name, dtype=dtype
+                    BatchNorm, size=expanded_channels, axis_name=axis_name, dtype=dtype
                 ),
                 activation_layer=jax.nn.silu,
                 key=subkey,
@@ -264,7 +268,7 @@ class FusedMBConv(eqx.Module):
                 cnf.out_channels,
                 kernel_size=1,
                 norm_layer=functools.partial(
-                    BatchNorm, axis_name=axis_name, dtype=dtype
+                    BatchNorm, size=cnf.out_channels, axis_name=axis_name, dtype=dtype
                 ),
                 activation_layer=None,
                 key=subkey2,
@@ -279,7 +283,7 @@ class FusedMBConv(eqx.Module):
                 kernel_size=cnf.kernel,
                 stride=cnf.stride,
                 norm_layer=functools.partial(
-                    BatchNorm, axis_name=axis_name, dtype=dtype
+                    BatchNorm, size=cnf.out_channels, axis_name=axis_name, dtype=dtype
                 ),
                 activation_layer=jax.nn.silu,
                 key=subkey,
@@ -335,8 +339,8 @@ class Classifier(eqx.Module):
 
         self.linear = eqx.nn.Linear(in_features, out_features, key=key, dtype=dtype)
 
-    def __call__(self, x: Array, inference: bool, key: PRNGKeyArray) -> Array:
-        x = self.dropout(x, inference=inference, key=key)
+    def __call__(self, x: Array, key: PRNGKeyArray) -> Array:
+        x = self.dropout(x, key=key)
         x = self.linear(x)
         return x
 
@@ -355,9 +359,9 @@ class EfficientNet(eqx.Module):
         last_channel: int | None = None,
         *,
         key: PRNGKeyArray,
-        dtype: Any | None = None,  # Added optional dtype parameter
+        axis_name: str = "batch",
+        dtype: Any | None = None,
     ):
-        # Determine default dtype if not provided
         if dtype is None:
             dtype = default_floating_dtype()
         assert dtype is not None
@@ -384,7 +388,12 @@ class EfficientNet(eqx.Module):
                 firstconv_output_channels,
                 kernel_size=3,
                 stride=2,
-                norm_layer=BatchNorm,
+                norm_layer=functools.partial(
+                    BatchNorm,
+                    size=firstconv_output_channels,
+                    axis_name=axis_name,
+                    dtype=dtype,
+                ),
                 activation_layer=jax.nn.silu,
                 key=subkeys[0],
                 dtype=dtype,
@@ -428,7 +437,12 @@ class EfficientNet(eqx.Module):
                 lastconv_input_channels,
                 lastconv_output_channels,
                 kernel_size=1,
-                norm_layer=BatchNorm,
+                norm_layer=functools.partial(
+                    BatchNorm,
+                    size=lastconv_output_channels,
+                    axis_name=axis_name,
+                    dtype=dtype,
+                ),
                 activation_layer=jax.nn.silu,
                 key=subkey1,
                 dtype=dtype,
@@ -446,7 +460,7 @@ class EfficientNet(eqx.Module):
         # TODO: kaiming init
 
     def __call__(
-        self, x: Array, state: eqx.nn.State, inference: bool, key: PRNGKeyArray
+        self, x: Array, state: eqx.nn.State, key: PRNGKeyArray
     ) -> tuple[Array, eqx.nn.State]:
         num_feature_layers = len(self.features)
         keys = jax.random.split(key, num_feature_layers + 2)
@@ -459,7 +473,7 @@ class EfficientNet(eqx.Module):
         x = self.avgpool(x)
         x = jnp.ravel(x)
 
-        x = self.classifier(x, inference, classifier_key)
+        x = self.classifier(x, classifier_key)
 
         return x, state
 
@@ -594,7 +608,6 @@ def _with_weights(
     )
     # If it's a checkpoint dict, extract the state_dict
     if not isinstance(weights_dict, dict):
-        # Try loading as a JIT model like in CLIP if simple load fails
         try:
             torch_model = torch.jit.load(weights_file, map_location=torch.device("cpu"))
             temp_dict = {}

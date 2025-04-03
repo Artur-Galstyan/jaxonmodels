@@ -1,4 +1,3 @@
-import functools as ft
 import os
 
 import equinox as eqx
@@ -50,8 +49,8 @@ def main():
         key=jax.random.key(0),
         dtype=jnp.float16,
     )
-    # Set model to inference mode for batch normalization
-    r = ft.partial(r, inference=True)
+
+    r, s = eqx.nn.inference_mode((r, s))
 
     current_dir = os.path.dirname(os.path.abspath(__file__))
     image_path = os.path.join(current_dir, "cat.jpg")

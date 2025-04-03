@@ -74,11 +74,9 @@ class Downsample(eqx.Module):
         self,
         x: Float[Array, "c_in h w"],
         state: eqx.nn.State,
-        *,
-        inference: bool = False,
     ) -> tuple[Float[Array, "c_out*e h/s w/s"], eqx.nn.State]:
         x = self.conv(x)
-        x, state = self.bn(x, state, inference=inference)
+        x, state = self.bn(x, state)
 
         return x, state
 
@@ -144,15 +142,15 @@ class BasicBlock(eqx.Module):
         i = x
 
         x = self.conv1(x)
-        x, state = self.bn1(x, state, inference=inference)
+        x, state = self.bn1(x, state)
 
         x = jax.nn.relu(x)
 
         x = self.conv2(x)
-        x, state = self.bn2(x, state, inference=inference)
+        x, state = self.bn2(x, state)
 
         if self.downsample:
-            i, state = self.downsample(i, state, inference=inference)
+            i, state = self.downsample(i, state)
 
         x += i
         x = jax.nn.relu(x)
@@ -240,18 +238,18 @@ class Bottleneck(eqx.Module):
         i = x
 
         x = self.conv1(x)
-        x, state = self.bn1(x, state, inference=inference)
+        x, state = self.bn1(x, state)
         x = jax.nn.relu(x)
 
         x = self.conv2(x)
-        x, state = self.bn2(x, state, inference=inference)
+        x, state = self.bn2(x, state)
         x = jax.nn.relu(x)
 
         x = self.conv3(x)
-        x, state = self.bn3(x, state, inference=inference)
+        x, state = self.bn3(x, state)
 
         if self.downsample:
-            i, state = self.downsample(i, state, inference=inference)
+            i, state = self.downsample(i, state)
 
         x += i
         x = jax.nn.relu(x)
@@ -473,7 +471,7 @@ class ResNet(eqx.Module):
     ) -> tuple[Float[Array, " n_classes"], eqx.nn.State]:
         assert state is not None
         x = self.conv1(x)
-        x, state = self.bn(x, state, inference=inference)
+        x, state = self.bn(x, state)
         x = jax.nn.relu(x)
         x = self.mp(x)
 
