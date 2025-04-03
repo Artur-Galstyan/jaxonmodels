@@ -11,9 +11,11 @@ from jaxonmodels.models.convnext import load_convnext
 def main():
     # Load the ConvNeXt model with pre-trained weights
     # Note: ConvNeXt doesn't return state like EfficientNet
-    model = load_convnext(
+    model, state = load_convnext(
         "convnext_base", weights="convnext_base_IMAGENET1K_V1", dtype=jnp.float32
     )
+
+    model, state = eqx.nn.inference_mode((model, state))
 
     # Path to image
     img_path = "cat.jpg"
@@ -45,7 +47,9 @@ def main():
 
     # Apply model to input batch
     # Use vmap to handle the batch dimension
-    output = eqx.filter_vmap(lambda x: model(x, key=subkey))(input_batch)
+    output, state = eqx.filter_vmap(
+        model, in_axes=(0, None, None), out_axes=(0, None), axis_name="batch"
+    )(input_batch, state, subkey)
     print(f"{output.shape=}")
 
     # Load ImageNet class labels

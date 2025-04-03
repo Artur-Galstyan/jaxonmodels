@@ -59,6 +59,8 @@ def test_cnblock_equivalence():
         dtype=dtype,
     )
 
+    jax_block, state = eqx.nn.inference_mode((jax_block, state))
+
     np_input = np.random.rand(batch_size, dim, 56, 56).astype(np_dtype)
     torch_input = torch.from_numpy(np_input).to(torch_dtype)
 
@@ -67,7 +69,7 @@ def test_cnblock_equivalence():
         torch_output = torch_block(torch_input)
 
     jax_input = jnp.array(np_input, dtype=dtype)
-    jax_infer_func = functools.partial(jax_block, inference=True, key=vmap_key)
+    jax_infer_func = functools.partial(jax_block, key=vmap_key)
     jax_output = eqx.filter_vmap(jax_infer_func)(jax_input)
 
     assert jax_output.shape == torch_output.shape

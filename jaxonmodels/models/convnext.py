@@ -1,3 +1,4 @@
+import functools
 import os
 from pathlib import Path
 from urllib.request import urlretrieve
@@ -6,7 +7,7 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 from beartype.typing import Any, Callable, Literal, Sequence
-from equinox.nn import LayerNorm
+from equinox.nn import StatefulLayer
 from jaxtyping import Array, Float, PRNGKeyArray
 
 from jaxonmodels.functions import default_floating_dtype, dtype_to_str
@@ -25,6 +26,37 @@ _MODELS = {
     "convnext_base_IMAGENET1K_V1": "https://download.pytorch.org/models/convnext_base-6075fbad.pth",
     "convnext_large_IMAGENET1K_V1": "https://download.pytorch.org/models/convnext_large-ea097f82.pth",
 }
+
+
+class LayerNorm2d(eqx.Module):
+    layer_norm: eqx.nn.LayerNorm
+
+    def __init__(
+        self,
+        shape: int | Sequence[int],
+        eps: float = 0.00001,
+        use_weight: bool = True,
+        use_bias: bool = True,
+        dtype: Any | None = None,
+        *,
+        elementwise_affine: bool | None = None,
+    ):
+        self.layer_norm = eqx.nn.LayerNorm(
+            shape,
+            eps,
+            use_weight,
+            use_bias,
+            dtype=dtype,
+            elementwise_affine=elementwise_affine,
+        )
+
+    def __call__(
+        self, x: Float[Array, "c h w"], *, key: PRNGKeyArray | None = None
+    ) -> Float[Array, "c h w"]:
+        x = jnp.transpose(x, (1, 2, 0))
+        x = eqx.filter_vmap(eqx.filter_vmap(self.layer_norm))(x)
+        x = jnp.transpose(x, (2, 0, 1))
+        return x
 
 
 class CNBlockConfig:
@@ -80,7 +112,7 @@ class CNBlock(eqx.Module):
             dtype=dtype,
         )
         if norm_layer is None:
-            self.norm = LayerNorm(shape=dim, eps=1e-6)
+            self.norm = LayerNorm2d(shape=dim, eps=1e-6)
         else:
             self.norm = norm_layer(shape=dim, eps=1e-6)
 
@@ -106,40 +138,42 @@ class CNBlock(eqx.Module):
     def __call__(
         self,
         x: Float[Array, "c h w"],
-        inference: bool,
         key: PRNGKeyArray,
     ) -> Float[Array, "c h w"]:
         residual = x
         x = self.dwconv(x)
+        x = self.norm(x)  # pyright: ignore
         x = jnp.transpose(x, (1, 2, 0))
-        x = eqx.filter_vmap(eqx.filter_vmap(self.norm))(x)  # pyright: ignore
         x = eqx.filter_vmap(eqx.filter_vmap(self.pwconv1))(x)
         x = jax.nn.gelu(x)
         x = eqx.filter_vmap(eqx.filter_vmap(self.pwconv2))(x)
         x = jnp.transpose(x, (2, 0, 1))
         x = self.layer_scale * x
-        x = self.stochastic_depth(x, key=key, inference=inference)
+        x = self.stochastic_depth(x, key=key)
         x = x + residual
         return x
 
 
-class ConvNeXt(eqx.Module):
+class ConvNeXt(StatefulLayer):
     features: eqx.nn.Sequential
     avgpool: eqx.nn.AdaptiveAvgPool2d
     classifier: eqx.nn.Sequential
 
+    inference: bool
+
     def __init__(
         self,
         block_setting: list[CNBlockConfig],
-        stochastic_depth_prob: float = 0.0,
-        layer_scale: float = 1e-6,
-        num_classes: int = 1000,
-        block: Callable[..., eqx.Module] | None = None,
-        norm_layer: Callable[..., eqx.Module] | None = None,
-        *,
+        stochastic_depth_prob: float,
+        layer_scale: float,
+        num_classes: int,
+        block: Callable[..., eqx.Module] | None,
+        norm_layer: Callable[..., eqx.Module] | None,
+        inference: bool,
         key: PRNGKeyArray,
         dtype: Any,
     ) -> None:
+        self.inference = inference
         if not block_setting:
             raise ValueError("The block_setting should not be empty")
         elif not (
@@ -155,13 +189,13 @@ class ConvNeXt(eqx.Module):
         if block is None:
             block = CNBlock
 
-        if norm_layer is None:
-            norm_layer = LayerNorm
-        assert norm_layer is not None
-        layers: list[eqx.Module] = []
-
         key, subkey = jax.random.split(key)
         firstconv_output_channels = block_setting[0].input_channels
+
+        if norm_layer is None:
+            norm_layer = functools.partial(LayerNorm2d, dtype=dtype)
+        assert norm_layer is not None
+        layers: list[eqx.Module] = []
 
         layers.append(
             ConvNormActivation(
@@ -171,7 +205,9 @@ class ConvNeXt(eqx.Module):
                 kernel_size=4,
                 stride=4,
                 padding=0,
-                norm_layer=norm_layer,
+                norm_layer=functools.partial(
+                    norm_layer, shape=firstconv_output_channels
+                ),
                 activation_layer=None,
                 use_bias=True,
                 key=subkey,
@@ -194,7 +230,7 @@ class ConvNeXt(eqx.Module):
                         cnf.input_channels,
                         layer_scale,
                         sd_prob,
-                        norm_layer,
+                        norm_layer=None,
                         key=subkeys[i],
                         dtype=dtype,
                     )
@@ -232,7 +268,7 @@ class ConvNeXt(eqx.Module):
         key, subkey = jax.random.split(key)
         self.classifier = eqx.nn.Sequential(
             [
-                norm_layer(lastconv_output_channels, dtype=dtype),  # pyright: ignore
+                norm_layer(lastconv_output_channels),  # pyright: ignore
                 eqx.nn.Lambda(lambda x: jnp.ravel(x)),
                 eqx.nn.Linear(
                     lastconv_output_channels, num_classes, key=subkey, dtype=dtype
@@ -245,19 +281,17 @@ class ConvNeXt(eqx.Module):
     def __call__(
         self,
         x: Array,
+        state: eqx.nn.State,
         key: PRNGKeyArray,
-        *,
-        state: eqx.nn.State | None = None,
     ):
-        # todo: Handle state if norm_layer is stateful
-        key, *subkeys = jax.random.split(key, 3)
-        x = self.features(x, key=subkeys[0])
+        key, *subkeys = jax.random.split(key, 4)
+        x, state = self.features(x, key=subkeys[0], state=state)
         x = self.avgpool(x, key=subkeys[1])
-        x = self.classifier(x, key=subkeys[2])
-        return x
+        x, state = self.classifier(x, key=subkeys[2], state=state)
+        return x, state
 
 
-def _convnext_tiny(key, num_classes=1000, dtype: Any = None):
+def _convnext_tiny(key, inference: bool, num_classes=1000, dtype: Any = None):
     """Creates a ConvNeXt Tiny model."""
     if dtype is None:
         dtype = default_floating_dtype()
@@ -270,18 +304,22 @@ def _convnext_tiny(key, num_classes=1000, dtype: Any = None):
         CNBlockConfig(768, None, 3),
     ]
 
-    model = ConvNeXt(
+    model, state = eqx.nn.make_with_state(ConvNeXt)(
         block_setting=block_setting,
         stochastic_depth_prob=0.1,
         num_classes=num_classes,
+        layer_scale=1e-6,
+        block=None,
+        norm_layer=None,
+        inference=inference,
         key=key,
         dtype=dtype,
     )
 
-    return model
+    return model, state
 
 
-def _convnext_small(key, num_classes=1000, dtype: Any = None):
+def _convnext_small(key, inference: bool, num_classes=1000, dtype: Any = None):
     """Creates a ConvNeXt Small model."""
     if dtype is None:
         dtype = default_floating_dtype()
@@ -294,18 +332,22 @@ def _convnext_small(key, num_classes=1000, dtype: Any = None):
         CNBlockConfig(768, None, 3),
     ]
 
-    model = ConvNeXt(
+    model, state = eqx.nn.make_with_state(ConvNeXt)(
         block_setting=block_setting,
         stochastic_depth_prob=0.4,
         num_classes=num_classes,
+        layer_scale=1e-6,
+        block=None,
+        norm_layer=None,
+        inference=inference,
         key=key,
         dtype=dtype,
     )
 
-    return model
+    return model, state
 
 
-def _convnext_base(key, num_classes=1000, dtype: Any = None):
+def _convnext_base(key, inference: bool, num_classes=1000, dtype: Any = None):
     """Creates a ConvNeXt Base model."""
     if dtype is None:
         dtype = default_floating_dtype()
@@ -318,18 +360,22 @@ def _convnext_base(key, num_classes=1000, dtype: Any = None):
         CNBlockConfig(1024, None, 3),
     ]
 
-    model = ConvNeXt(
+    model, state = eqx.nn.make_with_state(ConvNeXt)(
         block_setting=block_setting,
         stochastic_depth_prob=0.5,
         num_classes=num_classes,
+        layer_scale=1e-6,
+        block=None,
+        norm_layer=None,
+        inference=inference,
         key=key,
         dtype=dtype,
     )
 
-    return model
+    return model, state
 
 
-def _convnext_large(key, num_classes=1000, dtype: Any = None):
+def _convnext_large(key, inference: bool, num_classes=1000, dtype: Any = None):
     """Creates a ConvNeXt Large model."""
     if dtype is None:
         dtype = default_floating_dtype()
@@ -342,15 +388,19 @@ def _convnext_large(key, num_classes=1000, dtype: Any = None):
         CNBlockConfig(1536, None, 3),
     ]
 
-    model = ConvNeXt(
+    model, state = eqx.nn.make_with_state(ConvNeXt)(
         block_setting=block_setting,
         stochastic_depth_prob=0.5,
         num_classes=num_classes,
+        layer_scale=1e-6,
+        block=None,
+        norm_layer=None,
+        inference=inference,
         key=key,
         dtype=dtype,
     )
 
-    return model
+    return model, state
 
 
 def _with_weights(
@@ -485,10 +535,10 @@ def load_convnext(
     | None = None,
     num_classes: int = 1000,
     cache: bool = True,
-    *,
+    inference: bool = False,
     key: PRNGKeyArray | None = None,
     dtype: Any = None,
-) -> ConvNeXt:
+) -> tuple[ConvNeXt, eqx.nn.State]:
     """
     Load a ConvNeXt model with optional pre-trained weights.
 
@@ -513,23 +563,24 @@ def load_convnext(
     assert dtype is not None  # Ensure dtype is set
 
     convnext = None
+    state = None
 
     match model:
         case "convnext_tiny":
-            convnext = _convnext_tiny(key, num_classes, dtype=dtype)
+            convnext, state = _convnext_tiny(key, inference, num_classes, dtype=dtype)
         case "convnext_small":
-            convnext = _convnext_small(key, num_classes, dtype=dtype)
+            convnext, state = _convnext_small(key, inference, num_classes, dtype=dtype)
         case "convnext_base":
-            convnext = _convnext_base(key, num_classes, dtype=dtype)
+            convnext, state = _convnext_base(key, inference, num_classes, dtype=dtype)
         case "convnext_large":
-            convnext = _convnext_large(key, num_classes, dtype=dtype)
+            convnext, state = _convnext_large(key, inference, num_classes, dtype=dtype)
         case _:
             raise ValueError(f"Unknown model name: {model}")
 
     if weights:
         _assert_model_and_weights_fit(model, weights)
-        convnext = _with_weights(convnext, weights, cache, dtype=dtype)
+        convnext, state = _with_weights((convnext, state), weights, cache, dtype=dtype)
 
     assert convnext is not None
 
-    return convnext
+    return convnext, state
