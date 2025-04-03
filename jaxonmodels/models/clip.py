@@ -37,14 +37,18 @@ class Downsample(eqx.Module):
     conv: eqx.nn.Conv2d
     bn: BatchNorm
 
+    inference: bool
+
     def __init__(
         self,
         in_channels: int,
         out_channels: int,
         stride: int,
+        inference: bool,
         key: PRNGKeyArray,
         dtype: Any,
     ):
+        self.inference = inference
         _, subkey = jax.random.split(key)
         self.avg = eqx.nn.AvgPool2d(kernel_size=stride, stride=stride)
         self.conv = eqx.nn.Conv2d(
@@ -63,12 +67,10 @@ class Downsample(eqx.Module):
         self,
         x: Float[Array, "c_in h w"],
         state: eqx.nn.State,
-        *,
-        inference: bool = False,
     ) -> tuple[Float[Array, "c_out*e h/s w/s"], eqx.nn.State]:
         x = self.avg(x)
         x = self.conv(x)
-        x, state = self.bn(x, state, inference=inference)
+        x, state = self.bn(x, state)
 
         return x, state
 
@@ -87,6 +89,7 @@ class Bottleneck(eqx.Module):
 
     avgpool: eqx.nn.AvgPool2d | None
 
+    inference: bool
     expansion: int = eqx.field(static=True, default=4)
 
     def __init__(
@@ -94,11 +97,12 @@ class Bottleneck(eqx.Module):
         in_channels: int,
         out_channels: int,
         stride: int,
-        *,
-        axis_name: str = "batch",
+        inference: bool,
+        axis_name: str,
         key: PRNGKeyArray,
         dtype: Any,
     ):
+        self.inference = inference
         _, *subkeys = jax.random.split(key, 4)
 
         self.conv1 = eqx.nn.Conv2d(
@@ -109,7 +113,9 @@ class Bottleneck(eqx.Module):
             key=subkeys[0],
             dtype=dtype,
         )
-        self.bn1 = BatchNorm(out_channels, axis_name=axis_name, dtype=dtype)
+        self.bn1 = BatchNorm(
+            out_channels, inference=self.inference, axis_name=axis_name, dtype=dtype
+        )
 
         self.conv2 = eqx.nn.Conv2d(
             out_channels,
@@ -122,7 +128,9 @@ class Bottleneck(eqx.Module):
             dtype=dtype,
         )
 
-        self.bn2 = BatchNorm(out_channels, axis_name=axis_name, dtype=dtype)
+        self.bn2 = BatchNorm(
+            out_channels, inference=inference, axis_name=axis_name, dtype=dtype
+        )
 
         self.avgpool = (
             eqx.nn.AvgPool2d(kernel_size=stride, stride=stride) if stride > 1 else None
@@ -138,7 +146,10 @@ class Bottleneck(eqx.Module):
         )
 
         self.bn3 = BatchNorm(
-            out_channels * self.expansion, axis_name=axis_name, dtype=dtype
+            out_channels * self.expansion,
+            inference=self.inference,
+            axis_name=axis_name,
+            dtype=dtype,
         )
 
         self.downsample = None
@@ -148,26 +159,27 @@ class Bottleneck(eqx.Module):
             self.downsample = Downsample(
                 in_channels,
                 out_channels * self.expansion,
+                inference=self.inference,
                 stride=stride,
                 key=subkey,
                 dtype=dtype,
             )
 
-    def __call__(self, x: Array, state: eqx.nn.State, inference: bool = False):
+    def __call__(self, x: Array, state: eqx.nn.State):
         identity = x
 
-        out, state = self.bn1(self.conv1(x), state, inference=inference)
+        out, state = self.bn1(self.conv1(x), state)
         out = jax.nn.relu(out)
 
-        out, state = self.bn2(self.conv2(out), state, inference=inference)
+        out, state = self.bn2(self.conv2(out), state)
         out = jax.nn.relu(out)
 
         if self.avgpool:
             out = self.avgpool(out)
-        out, state = self.bn3(self.conv3(out), state, inference=inference)
+        out, state = self.bn3(self.conv3(out), state)
 
         if self.downsample is not None:
-            identity, state = self.downsample(x, state, inference=inference)
+            identity, state = self.downsample(x, state)
 
         out += identity
         out = jax.nn.relu(out)
@@ -182,6 +194,8 @@ class AttentionPool2d(eqx.Module):
     v_proj: eqx.nn.Linear
     c_proj: eqx.nn.Linear
 
+    inference: bool
+
     num_heads: int = eqx.field(static=True)
 
     def __init__(
@@ -189,11 +203,12 @@ class AttentionPool2d(eqx.Module):
         spacial_dim: int,
         embed_dim: int,
         num_heads: int,
-        output_dim: int | None = None,
-        *,
+        output_dim: int | None,
+        inference: bool,
         key: PRNGKeyArray,
         dtype: Any,
     ):
+        self.inference = inference
         key, *subkeys = jax.random.split(key, 5)
         self.positional_embedding = (
             jax.random.normal(key, (spacial_dim**2 + 1, embed_dim), dtype=dtype)
@@ -207,7 +222,7 @@ class AttentionPool2d(eqx.Module):
         )
         self.num_heads = num_heads
 
-    def __call__(self, x: Float[Array, "c h w"], inference: bool = False):
+    def __call__(self, x: Float[Array, "c h w"]):
         c, h, w = x.shape
         x = jnp.einsum("chw->hwc", x).reshape(h * w, c)
         x = jnp.concatenate([jnp.mean(x, axis=0, keepdims=True), x], axis=0)
@@ -237,7 +252,7 @@ class AttentionPool2d(eqx.Module):
             out_proj_weight=self.c_proj.weight,
             out_proj_bias=self.c_proj.bias,
             use_separate_proj_weight=True,
-            inference=inference,
+            inference=self.inference,
             need_weights=False,
         )
         return x.squeeze(0)
@@ -245,10 +260,11 @@ class AttentionPool2d(eqx.Module):
 
 class ResNetBlock(eqx.Module):
     blocks: list[Bottleneck]
+    inference: bool
 
-    def __call__(self, x, state, *, inference: bool = False):
+    def __call__(self, x, state):
         for block in self.blocks:
-            x, state = block(x, state, inference=inference)
+            x, state = block(x, state)
         return x, state
 
 
@@ -271,24 +287,30 @@ class ModifiedResNet(eqx.Module):
 
     attnpool: AttentionPool2d
 
+    inference: bool
+
     _inplanes: int = eqx.field(static=True)
     output_dim: int = eqx.field(static=True)
     input_resolution: int = eqx.field(static=True)
 
+    axis_name: str = eqx.field(static=True)
+
     def __init__(
         self,
         layers,
-        output_dim,
-        heads,
-        input_resolution=224,
-        width=64,
-        *,
+        output_dim: int,
+        heads: int,
+        input_resolution: int,
+        width: int,
+        inference: bool,
         key: PRNGKeyArray,
-        axis_name: str = "batch",
+        axis_name: str,
         dtype: Any,
     ):
+        self.inference = inference
         self.output_dim = output_dim
         self.input_resolution = input_resolution
+        self.axis_name = axis_name
 
         key, *subkeys = jax.random.split(key, 7)
 
@@ -303,7 +325,9 @@ class ModifiedResNet(eqx.Module):
             key=subkeys[0],
             dtype=dtype,
         )
-        self.bn1 = BatchNorm(width // 2, axis_name=axis_name)
+        self.bn1 = BatchNorm(
+            width // 2, inference=self.inference, dtype=dtype, axis_name=axis_name
+        )
 
         self.conv2 = eqx.nn.Conv2d(
             width // 2,
@@ -314,7 +338,9 @@ class ModifiedResNet(eqx.Module):
             key=subkeys[1],
             dtype=dtype,
         )
-        self.bn2 = BatchNorm(width // 2, axis_name=axis_name, dtype=dtype)
+        self.bn2 = BatchNorm(
+            width // 2, inference=self.inference, axis_name=axis_name, dtype=dtype
+        )
 
         self.conv3 = eqx.nn.Conv2d(
             width // 2,
@@ -348,6 +374,7 @@ class ModifiedResNet(eqx.Module):
             embed_dim,
             heads,
             output_dim,
+            self.inference,
             key=subkeys[4],
             dtype=dtype,
         )
@@ -357,43 +384,55 @@ class ModifiedResNet(eqx.Module):
     ):
         key, *subkeys = jax.random.split(key, blocks + 1)
         layers = [
-            Bottleneck(self._inplanes, planes, stride, key=subkeys[0], dtype=dtype)
+            Bottleneck(
+                self._inplanes,
+                planes,
+                stride,
+                inference=self.inference,
+                axis_name=self.axis_name,
+                key=subkeys[0],
+                dtype=dtype,
+            )
         ]
 
         self._inplanes = planes * Bottleneck.expansion
         for i in range(1, blocks):
             layers.append(
                 Bottleneck(
-                    self._inplanes, planes, stride=1, key=subkeys[i], dtype=dtype
+                    self._inplanes,
+                    planes,
+                    stride=1,
+                    inference=self.inference,
+                    axis_name=self.axis_name,
+                    key=subkeys[i],
+                    dtype=dtype,
                 )
             )
 
-        return ResNetBlock(layers)
+        return ResNetBlock(layers, self.inference)
 
     def __call__(
         self,
         x: Float[Array, "c h w"],
-        *,
         state: eqx.nn.State | None = None,
-        inference: bool = False,
     ):
         assert state is not None, "Must give state for ResNet"
 
-        def stem(x, state, inference):
-            x, state = self.bn1(self.conv1(x), state, inference=inference)
+        def stem(x, state):
+            x, state = self.bn1(self.conv1(x), state)
             x = jax.nn.relu(x)
-            x, state = self.bn2(self.conv2(x), state, inference=inference)
+            x, state = self.bn2(self.conv2(x), state)
             x = jax.nn.relu(x)
-            x, state = self.bn3(self.conv3(x), state, inference=inference)
+            x, state = self.bn3(self.conv3(x), state)
             x = jax.nn.relu(x)
             x = self.avgpool(x)
             return x, state
 
-        x, state = stem(x, state, inference)
-        x, state = self.layer1(x, state, inference=inference)
-        x, state = self.layer2(x, state, inference=inference)
-        x, state = self.layer3(x, state, inference=inference)
-        x, state = self.layer4(x, state, inference=inference)
+        x, state = stem(x, state)
+        x, state = self.layer1(x, state)
+        x, state = self.layer2(x, state)
+        x, state = self.layer3(x, state)
+        x, state = self.layer4(x, state)
         x = self.attnpool(x)
 
         return x, state
@@ -406,9 +445,16 @@ class ResidualAttentionBlock(eqx.Module):
     c_proj: eqx.nn.Linear
     ln_2: eqx.nn.LayerNorm
 
-    def __init__(self, d_model: int, n_head: int, *, key: PRNGKeyArray, dtype: Any):
+    inference: bool
+
+    def __init__(
+        self, d_model: int, n_head: int, inference: bool, key: PRNGKeyArray, dtype: Any
+    ):
+        self.inference = inference
         key, *subkeys = jax.random.split(key, 5)
-        self.attn = MultiheadAttention(d_model, n_head, key=subkeys[0], dtype=dtype)
+        self.attn = MultiheadAttention(
+            d_model, n_head, inference=inference, key=subkeys[0], dtype=dtype
+        )
         self.ln_1 = eqx.nn.LayerNorm(d_model, dtype=dtype)
         self.c_fc = eqx.nn.Linear(d_model, d_model * 4, key=subkeys[1], dtype=dtype)
         self.c_proj = eqx.nn.Linear(d_model * 4, d_model, key=subkeys[2], dtype=dtype)
@@ -432,12 +478,23 @@ class ResidualAttentionBlock(eqx.Module):
 class Transformer(eqx.Module):
     resblocks: list[ResidualAttentionBlock]
 
+    inference: bool
+
     def __init__(
-        self, width: int, layers: int, heads: int, *, key: PRNGKeyArray, dtype: Any
+        self,
+        width: int,
+        layers: int,
+        heads: int,
+        inference: bool,
+        key: PRNGKeyArray,
+        dtype: Any,
     ):
+        self.inference = inference
         key, *subkeys = jax.random.split(key, layers + 1)
         self.resblocks = [
-            ResidualAttentionBlock(width, heads, key=subkeys[i], dtype=dtype)
+            ResidualAttentionBlock(
+                width, heads, self.inference, key=subkeys[i], dtype=dtype
+            )
             for i in range(layers)
         ]
 
@@ -459,6 +516,8 @@ class VisionTransformer(eqx.Module):
     transformer: Transformer
     ln_post: eqx.nn.LayerNorm
 
+    inference: bool
+
     def __init__(
         self,
         input_resolution: int,
@@ -467,10 +526,11 @@ class VisionTransformer(eqx.Module):
         layers: int,
         heads: int,
         output_dim: int,
-        *,
+        inference: bool,
         key: PRNGKeyArray,
         dtype: Any,
     ):
+        self.inference = inference
         key, *subkeys = jax.random.split(key, 6)
         self.conv1 = eqx.nn.Conv2d(
             in_channels=3,
@@ -493,7 +553,7 @@ class VisionTransformer(eqx.Module):
         self.ln_pre = eqx.nn.LayerNorm(width, dtype=dtype)
 
         self.transformer = Transformer(
-            width, layers, heads, key=subkeys[3], dtype=dtype
+            width, layers, heads, self.inference, key=subkeys[3], dtype=dtype
         )
 
         self.ln_post = eqx.nn.LayerNorm(width, dtype=dtype)
@@ -504,9 +564,7 @@ class VisionTransformer(eqx.Module):
     def __call__(
         self,
         x: Float[Array, "c h w"],
-        *,
         state: eqx.nn.State | None = None,
-        inference: bool = False,
     ):
         x = self.conv1(x)
         x = x.reshape(x.shape[0], -1)
@@ -538,7 +596,10 @@ class CLIP(eqx.Module):
     token_embedding: eqx.nn.Embedding
     ln_final: eqx.nn.LayerNorm
 
+    inference: bool
+
     context_length: int = eqx.field(static=True)
+    axis_name: str = eqx.field(static=True)
 
     def __init__(
         self,
@@ -554,10 +615,13 @@ class CLIP(eqx.Module):
         transformer_width: int,
         transformer_heads: int,
         transformer_layers: int,
-        *,
+        inference: bool,
+        axis_name: str,
         key: PRNGKeyArray | None = None,
         dtype: Any | None = None,
     ):
+        self.inference = inference
+        self.axis_name = axis_name
         if dtype is None:
             dtype = default_floating_dtype()
         assert dtype is not None
@@ -575,6 +639,8 @@ class CLIP(eqx.Module):
                 heads=vision_heads,
                 input_resolution=image_resolution,
                 width=vision_width,
+                inference=self.inference,
+                axis_name=self.axis_name,
                 key=subkeys[0],
                 dtype=dtype,
             )
@@ -588,6 +654,7 @@ class CLIP(eqx.Module):
                 layers=vision_layers,
                 heads=vision_heads,
                 output_dim=embed_dim,
+                inference=self.inference,
                 key=subkeys[0],
                 dtype=dtype,
             )
@@ -595,6 +662,7 @@ class CLIP(eqx.Module):
             width=transformer_width,
             layers=transformer_layers,
             heads=transformer_heads,
+            inference=self.inference,
             key=subkeys[1],
             dtype=dtype,
         )
@@ -620,8 +688,8 @@ class CLIP(eqx.Module):
         # todo
         pass
 
-    def encode_image(self, image, state: eqx.nn.State | None, inference: bool = True):
-        return self.visual(image, state=state, inference=inference)
+    def encode_image(self, image, state: eqx.nn.State | None):
+        return self.visual(image, state=state)
 
     def encode_text(self, text: Int[Array, "77"], attn_mask: Array):
         x = eqx.filter_vmap(self.token_embedding)(text)  # [n_ctx, d_model]
@@ -642,9 +710,8 @@ class CLIP(eqx.Module):
         text: Int[Array, "1 77"],
         state: eqx.nn.State | None,
         attn_mask: Array | None = None,
-        inference: bool = False,
     ):
-        image_features, state = self.encode_image(image, state, inference=inference)
+        image_features, state = self.encode_image(image, state)
         text = text.reshape(-1)
         if attn_mask is None:
             attn_mask = F.build_attention_mask(self.context_length)
@@ -738,7 +805,7 @@ def _with_weights(
     return clip, state
 
 
-def _clip_resnet50(key: PRNGKeyArray, dtype: Any):
+def _clip_resnet50(key: PRNGKeyArray, dtype: Any, inference: bool, axis_name: str):
     embed_dim = 1024
     image_resolution = 224
     vision_layers = (3, 4, 6, 3)
@@ -751,16 +818,18 @@ def _clip_resnet50(key: PRNGKeyArray, dtype: Any):
     transformer_layers = 12
 
     clip, state = eqx.nn.make_with_state(CLIP)(
-        embed_dim,
-        image_resolution,
-        vision_layers,
-        vision_width,
-        vision_patch_size,
-        context_length,
-        vocab_size,
-        transformer_width,
-        transformer_heads,
-        transformer_layers,
+        embed_dim=embed_dim,
+        image_resolution=image_resolution,
+        vision_layers=vision_layers,
+        vision_width=vision_width,
+        vision_patch_size=vision_patch_size,
+        context_length=context_length,
+        vocab_size=vocab_size,
+        transformer_width=transformer_width,
+        transformer_heads=transformer_heads,
+        transformer_layers=transformer_layers,
+        inference=inference,
+        axis_name=axis_name,
         key=key,
         dtype=dtype,
     )
@@ -768,7 +837,7 @@ def _clip_resnet50(key: PRNGKeyArray, dtype: Any):
     return clip, state
 
 
-def _clip_resnet101(key: PRNGKeyArray, dtype: Any):
+def _clip_resnet101(key: PRNGKeyArray, dtype: Any, inference: bool, axis_name: str):
     embed_dim = 512
     image_resolution = 224
     vision_layers = (3, 4, 23, 3)
@@ -781,16 +850,18 @@ def _clip_resnet101(key: PRNGKeyArray, dtype: Any):
     transformer_layers = 12
 
     clip, state = eqx.nn.make_with_state(CLIP)(
-        embed_dim,
-        image_resolution,
-        vision_layers,
-        vision_width,
-        vision_patch_size,
-        context_length,
-        vocab_size,
-        transformer_width,
-        transformer_heads,
-        transformer_layers,
+        embed_dim=embed_dim,
+        image_resolution=image_resolution,
+        vision_layers=vision_layers,
+        vision_width=vision_width,
+        vision_patch_size=vision_patch_size,
+        context_length=context_length,
+        vocab_size=vocab_size,
+        transformer_width=transformer_width,
+        transformer_heads=transformer_heads,
+        transformer_layers=transformer_layers,
+        inference=inference,
+        axis_name=axis_name,
         key=key,
         dtype=dtype,
     )
@@ -798,7 +869,7 @@ def _clip_resnet101(key: PRNGKeyArray, dtype: Any):
     return clip, state
 
 
-def _clip_rn50x4(key: PRNGKeyArray, dtype: Any):
+def _clip_rn50x4(key: PRNGKeyArray, dtype: Any, inference: bool, axis_name: str):
     embed_dim = 640
     image_resolution = 288
     vision_layers = (4, 6, 10, 6)
@@ -811,16 +882,18 @@ def _clip_rn50x4(key: PRNGKeyArray, dtype: Any):
     transformer_layers = 12
 
     clip, state = eqx.nn.make_with_state(CLIP)(
-        embed_dim,
-        image_resolution,
-        vision_layers,
-        vision_width,
-        vision_patch_size,
-        context_length,
-        vocab_size,
-        transformer_width,
-        transformer_heads,
-        transformer_layers,
+        embed_dim=embed_dim,
+        image_resolution=image_resolution,
+        vision_layers=vision_layers,
+        vision_width=vision_width,
+        vision_patch_size=vision_patch_size,
+        context_length=context_length,
+        vocab_size=vocab_size,
+        transformer_width=transformer_width,
+        transformer_heads=transformer_heads,
+        transformer_layers=transformer_layers,
+        inference=inference,
+        axis_name=axis_name,
         key=key,
         dtype=dtype,
     )
@@ -828,7 +901,7 @@ def _clip_rn50x4(key: PRNGKeyArray, dtype: Any):
     return clip, state
 
 
-def _clip_rn50x16(key: PRNGKeyArray, dtype: Any):
+def _clip_rn50x16(key: PRNGKeyArray, dtype: Any, inference: bool, axis_name: str):
     embed_dim = 768
     image_resolution = 384
     vision_layers = (6, 8, 18, 8)
@@ -841,16 +914,18 @@ def _clip_rn50x16(key: PRNGKeyArray, dtype: Any):
     transformer_layers = 12
 
     clip, state = eqx.nn.make_with_state(CLIP)(
-        embed_dim,
-        image_resolution,
-        vision_layers,
-        vision_width,
-        vision_patch_size,
-        context_length,
-        vocab_size,
-        transformer_width,
-        transformer_heads,
-        transformer_layers,
+        embed_dim=embed_dim,
+        image_resolution=image_resolution,
+        vision_layers=vision_layers,
+        vision_width=vision_width,
+        vision_patch_size=vision_patch_size,
+        context_length=context_length,
+        vocab_size=vocab_size,
+        transformer_width=transformer_width,
+        transformer_heads=transformer_heads,
+        transformer_layers=transformer_layers,
+        inference=inference,
+        axis_name=axis_name,
         key=key,
         dtype=dtype,
     )
@@ -858,7 +933,7 @@ def _clip_rn50x16(key: PRNGKeyArray, dtype: Any):
     return clip, state
 
 
-def _clip_rn50x64(key: PRNGKeyArray, dtype: Any):
+def _clip_rn50x64(key: PRNGKeyArray, dtype: Any, inference: bool, axis_name: str):
     embed_dim = 1024
     image_resolution = 448
     vision_layers = (3, 15, 36, 10)
@@ -871,16 +946,18 @@ def _clip_rn50x64(key: PRNGKeyArray, dtype: Any):
     transformer_layers = 12
 
     clip, state = eqx.nn.make_with_state(CLIP)(
-        embed_dim,
-        image_resolution,
-        vision_layers,
-        vision_width,
-        vision_patch_size,
-        context_length,
-        vocab_size,
-        transformer_width,
-        transformer_heads,
-        transformer_layers,
+        embed_dim=embed_dim,
+        image_resolution=image_resolution,
+        vision_layers=vision_layers,
+        vision_width=vision_width,
+        vision_patch_size=vision_patch_size,
+        context_length=context_length,
+        vocab_size=vocab_size,
+        transformer_width=transformer_width,
+        transformer_heads=transformer_heads,
+        transformer_layers=transformer_layers,
+        inference=inference,
+        axis_name=axis_name,
         key=key,
         dtype=dtype,
     )
@@ -888,7 +965,7 @@ def _clip_rn50x64(key: PRNGKeyArray, dtype: Any):
     return clip, state
 
 
-def _clip_vit_b_16(key: PRNGKeyArray, dtype: Any):
+def _clip_vit_b_16(key: PRNGKeyArray, dtype: Any, inference: bool, axis_name: str):
     embed_dim = 512
     image_resolution = 224
     vision_layers = 12
@@ -901,16 +978,18 @@ def _clip_vit_b_16(key: PRNGKeyArray, dtype: Any):
     transformer_layers = 12
 
     clip, state = eqx.nn.make_with_state(CLIP)(
-        embed_dim,
-        image_resolution,
-        vision_layers,
-        vision_width,
-        vision_patch_size,
-        context_length,
-        vocab_size,
-        transformer_width,
-        transformer_heads,
-        transformer_layers,
+        embed_dim=embed_dim,
+        image_resolution=image_resolution,
+        vision_layers=vision_layers,
+        vision_width=vision_width,
+        vision_patch_size=vision_patch_size,
+        context_length=context_length,
+        vocab_size=vocab_size,
+        transformer_width=transformer_width,
+        transformer_heads=transformer_heads,
+        transformer_layers=transformer_layers,
+        inference=inference,
+        axis_name=axis_name,
         key=key,
         dtype=dtype,
     )
@@ -918,7 +997,7 @@ def _clip_vit_b_16(key: PRNGKeyArray, dtype: Any):
     return clip, state
 
 
-def _clip_vit_b_32(key: PRNGKeyArray, dtype: Any):
+def _clip_vit_b_32(key: PRNGKeyArray, dtype: Any, inference: bool, axis_name: str):
     embed_dim = 512
     image_resolution = 224
     vision_layers = 12
@@ -931,16 +1010,18 @@ def _clip_vit_b_32(key: PRNGKeyArray, dtype: Any):
     transformer_layers = 12
 
     clip, state = eqx.nn.make_with_state(CLIP)(
-        embed_dim,
-        image_resolution,
-        vision_layers,
-        vision_width,
-        vision_patch_size,
-        context_length,
-        vocab_size,
-        transformer_width,
-        transformer_heads,
-        transformer_layers,
+        embed_dim=embed_dim,
+        image_resolution=image_resolution,
+        vision_layers=vision_layers,
+        vision_width=vision_width,
+        vision_patch_size=vision_patch_size,
+        context_length=context_length,
+        vocab_size=vocab_size,
+        transformer_width=transformer_width,
+        transformer_heads=transformer_heads,
+        transformer_layers=transformer_layers,
+        inference=inference,
+        axis_name=axis_name,
         key=key,
         dtype=dtype,
     )
@@ -948,7 +1029,7 @@ def _clip_vit_b_32(key: PRNGKeyArray, dtype: Any):
     return clip, state
 
 
-def _clip_vit_l_14(key: PRNGKeyArray, dtype: Any):
+def _clip_vit_l_14(key: PRNGKeyArray, dtype: Any, inference: bool, axis_name: str):
     embed_dim = 768
     image_resolution = 224
     vision_layers = 24
@@ -961,16 +1042,18 @@ def _clip_vit_l_14(key: PRNGKeyArray, dtype: Any):
     transformer_layers = 12
 
     clip, state = eqx.nn.make_with_state(CLIP)(
-        embed_dim,
-        image_resolution,
-        vision_layers,
-        vision_width,
-        vision_patch_size,
-        context_length,
-        vocab_size,
-        transformer_width,
-        transformer_heads,
-        transformer_layers,
+        embed_dim=embed_dim,
+        image_resolution=image_resolution,
+        vision_layers=vision_layers,
+        vision_width=vision_width,
+        vision_patch_size=vision_patch_size,
+        context_length=context_length,
+        vocab_size=vocab_size,
+        transformer_width=transformer_width,
+        transformer_heads=transformer_heads,
+        transformer_layers=transformer_layers,
+        inference=inference,
+        axis_name=axis_name,
         key=key,
         dtype=dtype,
     )
@@ -978,7 +1061,9 @@ def _clip_vit_l_14(key: PRNGKeyArray, dtype: Any):
     return clip, state
 
 
-def _clip_vit_l_14_336px(key: PRNGKeyArray, dtype: Any):
+def _clip_vit_l_14_336px(
+    key: PRNGKeyArray, dtype: Any, inference: bool, axis_name: str
+):
     embed_dim = 768
     image_resolution = 336
     vision_layers = 24
@@ -991,16 +1076,18 @@ def _clip_vit_l_14_336px(key: PRNGKeyArray, dtype: Any):
     transformer_layers = 12
 
     clip, state = eqx.nn.make_with_state(CLIP)(
-        embed_dim,
-        image_resolution,
-        vision_layers,
-        vision_width,
-        vision_patch_size,
-        context_length,
-        vocab_size,
-        transformer_width,
-        transformer_heads,
-        transformer_layers,
+        embed_dim=embed_dim,
+        image_resolution=image_resolution,
+        vision_layers=vision_layers,
+        vision_width=vision_width,
+        vision_patch_size=vision_patch_size,
+        context_length=context_length,
+        vocab_size=vocab_size,
+        transformer_width=transformer_width,
+        transformer_heads=transformer_heads,
+        transformer_layers=transformer_layers,
+        inference=inference,
+        axis_name=axis_name,
         key=key,
         dtype=dtype,
     )
@@ -1022,10 +1109,31 @@ def load_clip(
     ],
     with_weights: bool = False,
     cache: bool = True,
+    inference: bool = True,
+    axis_name: str = "batch",
     *,
     key: PRNGKeyArray | None = None,
     dtype: Any | None = None,
 ):
+    """Loads a CLIP model.
+
+    Args:
+        model: The name of the CLIP model variant to load.
+        with_weights: Whether to load the pretrained weights from OpenAI.
+        cache: Whether to cache the downloaded weights and the converted model.
+        inference: Whether to initialize the model in inference mode.
+                   (e.g., for BatchNorm)
+                   Defaults to True.
+        axis_name: The name of the batch axis used for BatchNorm synchronization.
+                   Defaults to "batch".
+        key: A JAX PRNG key for initializing parameters if `with_weights=False`.
+        dtype: The data type to use for the model parameters. Defaults to the
+               `jaxonmodels` default floating-point type.
+
+    Returns:
+        A tuple `(clip_model, state)` where `clip_model` is the CLIP model
+        and `state` is the initial state (e.g., for BatchNorm statistics).
+    """
     if dtype is None:
         dtype = default_floating_dtype()
     assert dtype is not None
@@ -1035,23 +1143,41 @@ def load_clip(
 
     match model:
         case "RN50":
-            clip, state = _clip_resnet50(key=key, dtype=dtype)
+            clip, state = _clip_resnet50(
+                key=key, dtype=dtype, inference=inference, axis_name=axis_name
+            )
         case "RN101":
-            clip, state = _clip_resnet101(key=key, dtype=dtype)
+            clip, state = _clip_resnet101(
+                key=key, dtype=dtype, inference=inference, axis_name=axis_name
+            )
         case "RN50x4":
-            clip, state = _clip_rn50x4(key=key, dtype=dtype)
+            clip, state = _clip_rn50x4(
+                key=key, dtype=dtype, inference=inference, axis_name=axis_name
+            )
         case "RN50x16":
-            clip, state = _clip_rn50x16(key=key, dtype=dtype)
+            clip, state = _clip_rn50x16(
+                key=key, dtype=dtype, inference=inference, axis_name=axis_name
+            )
         case "RN50x64":
-            clip, state = _clip_rn50x64(key=key, dtype=dtype)
+            clip, state = _clip_rn50x64(
+                key=key, dtype=dtype, inference=inference, axis_name=axis_name
+            )
         case "ViT-B/32":
-            clip, state = _clip_vit_b_32(key=key, dtype=dtype)
+            clip, state = _clip_vit_b_32(
+                key=key, dtype=dtype, inference=inference, axis_name=axis_name
+            )
         case "ViT-B/16":
-            clip, state = _clip_vit_b_16(key=key, dtype=dtype)
+            clip, state = _clip_vit_b_16(
+                key=key, dtype=dtype, inference=inference, axis_name=axis_name
+            )
         case "ViT-L/14":
-            clip, state = _clip_vit_l_14(key=key, dtype=dtype)
+            clip, state = _clip_vit_l_14(
+                key=key, dtype=dtype, inference=inference, axis_name=axis_name
+            )
         case "ViT-L/14@336px":
-            clip, state = _clip_vit_l_14_336px(key=key, dtype=dtype)
+            clip, state = _clip_vit_l_14_336px(
+                key=key, dtype=dtype, inference=inference, axis_name=axis_name
+            )
 
     if clip is None or state is None:
         raise ValueError(f"Unrecognised model passed: {model}")

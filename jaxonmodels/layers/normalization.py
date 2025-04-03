@@ -55,11 +55,7 @@ class BatchNorm(eqx.nn.StatefulLayer):
         state: State,
         *,
         key: PRNGKeyArray | None = None,
-        inference: bool | None = None,
     ) -> tuple[Array, State]:
-        if inference is None:
-            inference = self.inference
-
         running_mean, running_var = state.get(self.state_index)
 
         input_shape = x.shape
@@ -69,7 +65,7 @@ class BatchNorm(eqx.nn.StatefulLayer):
             batch_mean = jax.lax.pmean(x, axis_name=self.axis_name)
             batch_size = jax.lax.psum(1, axis_name=self.axis_name)
 
-            if inference:
+            if self.inference:
                 x_normalized = (x - running_mean) / jnp.sqrt(running_var + self.eps)
             else:
                 xmu = x - batch_mean
@@ -90,7 +86,7 @@ class BatchNorm(eqx.nn.StatefulLayer):
         else:
             spatial_axes = tuple(range(1, ndim))  # All dims except channel dim (0)
 
-            if inference:
+            if self.inference:
                 x_normalized = (
                     x - running_mean.reshape((-1,) + (1,) * (ndim - 1))
                 ) / jnp.sqrt(running_var.reshape((-1,) + (1,) * (ndim - 1)) + self.eps)

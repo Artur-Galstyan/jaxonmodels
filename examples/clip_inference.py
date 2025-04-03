@@ -1,5 +1,3 @@
-import functools
-
 import equinox as eqx
 import jax
 import jax.numpy as jnp
@@ -82,11 +80,11 @@ image = transform_image(image_pil, image_resolution)
 
 # Load CLIP model
 clip, state = load_clip(model="ViT-B/32", with_weights=True, dtype=jnp.float16)
-clip_pt = functools.partial(clip, inference=True)
+clip, state = eqx.nn.inference_mode((clip, state))
 
 # Run the model with vmap for batching
 logits_per_image, logits_per_text, state = eqx.filter_vmap(
-    clip_pt, in_axes=(None, 0, None), out_axes=(0, 0, None), axis_name="batch"
+    clip, in_axes=(None, 0, None), out_axes=(0, 0, None), axis_name="batch"
 )(image, text, state)
 
 image_probs = jax.nn.softmax(logits_per_image)

@@ -119,6 +119,8 @@ def test_multihead_attention_equivalence(
         key=subkey,
     )
 
+    jax_mha = eqx.nn.inference_mode(jax_mha)
+
     # Initialize PyTorch model
     torch_mha = nn.MultiheadAttention(
         embed_dim=embed_dim,
@@ -138,7 +140,6 @@ def test_multihead_attention_equivalence(
     jax_mha_pt = functools.partial(
         jax_mha,
         need_weights=True,
-        inference=True,
     )
     jax_output, jax_attention = eqx.filter_vmap(jax_mha_pt)(
         jax_query,
@@ -227,6 +228,8 @@ def test_causal_attention(seq_len, embed_dim, num_heads, is_causal):
         key=subkey,
     )
 
+    jax_mha = eqx.nn.inference_mode(jax_mha)
+
     # Initialize PyTorch model
     torch_mha = nn.MultiheadAttention(
         embed_dim=embed_dim,
@@ -241,7 +244,6 @@ def test_causal_attention(seq_len, embed_dim, num_heads, is_causal):
     jax_mha_pt = functools.partial(
         jax_mha,
         need_weights=True,
-        inference=True,
         is_causal=is_causal,
     )
     jax_output, jax_attention = eqx.filter_vmap(jax_mha_pt)(
@@ -323,6 +325,8 @@ def test_key_padding_mask():
         key=subkey,
     )
 
+    jax_mha = eqx.nn.inference_mode(jax_mha)
+
     torch_mha = nn.MultiheadAttention(
         embed_dim=embed_dim,
         num_heads=num_heads,
@@ -337,7 +341,6 @@ def test_key_padding_mask():
     jax_mha_pt = functools.partial(
         jax_mha,
         need_weights=True,
-        inference=True,
     )
     jax_output, jax_attention = eqx.filter_vmap(jax_mha_pt)(
         jax_query, jax_key, jax_value, jax_key_padding_mask

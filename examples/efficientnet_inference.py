@@ -15,6 +15,8 @@ def main():
         "efficientnet_b0", weights="efficientnet_b0_IMAGENET1K_V1", dtype=jnp.float16
     )
 
+    model, state = eqx.nn.inference_mode((model, state), value=True)
+
     img_path = "cat.jpg"
     img = Image.open(img_path)
 
@@ -34,7 +36,7 @@ def main():
     input_batch = jnp.array(input_batch.numpy(), dtype=jnp.float16)
     print(f"{input_batch.shape=}")
     key, subkey = jax.random.split(key)
-    model_pt = functools.partial(model, inference=True, key=subkey)
+    model_pt = functools.partial(model, key=subkey)
     output, state = eqx.filter_vmap(
         model_pt, in_axes=(0, None), out_axes=(0, None), axis_name="batch"
     )(input_batch, state)
