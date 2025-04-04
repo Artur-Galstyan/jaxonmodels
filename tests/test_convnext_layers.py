@@ -52,7 +52,7 @@ def test_cnblock_equivalence_parametrized(  # Renamed function slightly
     key = jax.random.PRNGKey(42)
     # Use different keys for each test run potentially by splitting from a base key
     # Or reuse like this if deterministic randomness per parameter set is okay.
-    eqx_init_key, data_key, vmap_key = jax.random.split(key, 3)
+    key, eqx_init_key, data_key, vmap_key = jax.random.split(key, 4)
 
     dtype = jnp.float32
     np_dtype = np.float32
@@ -102,8 +102,9 @@ def test_cnblock_equivalence_parametrized(  # Renamed function slightly
     # If the model uses dropout/rng during inference based on the key,
     # you might need a different key handling strategy for vmap
     # For standard inference CNBlock, this partial should be fine.
+    key, subkey = jax.random.split(key)
     jax_infer_func = functools.partial(
-        jax_block, key=None
+        jax_block, key=subkey
     )  # Usually key is for dropout during training
     jax_output = eqx.filter_vmap(jax_infer_func)(jax_input)
 
