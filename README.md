@@ -17,6 +17,7 @@ These models have been implemented:
 - [x] ResNet
 - [x] ViT
 - [x] Mamba
+- [x] ConvNext
 
 
 ## Contributing
