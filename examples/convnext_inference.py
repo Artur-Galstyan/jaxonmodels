@@ -44,7 +44,7 @@ def main():
     # Since ConvNeXt doesn't have state in your implementation
     # We can call it directly without the filter_vmap that handles state
     key, subkey = jax.random.split(key)
-
+    model = eqx.filter_jit(model)
     # Apply model to input batch
     # Use vmap to handle the batch dimension
     output, state = eqx.filter_vmap(
