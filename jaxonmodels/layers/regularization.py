@@ -16,9 +16,5 @@ class StochasticDepth(eqx.Module):
         self.mode = mode
         self.inference = inference
 
-    def __call__(
-        self, input: Array, inference: bool | None = None, *, key: PRNGKeyArray
-    ) -> Array:
-        if inference is None:
-            inference = self.inference
-        return stochastic_depth(input, self.p, self.mode, inference, key)
+    def __call__(self, input: Array, key: PRNGKeyArray) -> Array:
+        return stochastic_depth(input, self.p, self.mode, self.inference, key)

@@ -80,17 +80,13 @@ class ConvNormActivation(StatefulLayer):
         x = self.conv(x)
 
         if self.norm:
-            x, state = self.norm(x, state)  # pyright: ignore
+            if isinstance(self.norm, StatefulLayer) and self.norm.is_stateful():
+                assert state is not None
+                x, state = self.norm(x, state)  # pyright: ignore
+            else:
+                x = self.norm(x)  # pyright: ignore
 
         if self.activation:
             x = self.activation(x)
 
         return x, state
-
-    def is_stateful(self) -> bool:
-        if self.norm is None:
-            return False
-        if isinstance(self.norm, StatefulLayer) and self.norm.is_stateful():
-            return True
-        else:
-            return False
