@@ -61,7 +61,7 @@ def main():
 
     print("\nTop 5 predictions:")
     for i, idx in enumerate(top_indices):
-        print(f"{i + 1}. {imagenet_labels[idx]} ({probabilities[idx] * 100:.2f}%)")
+        print(f"{i + 1}. {imagenet_labels[idx]} ({probabilities[idx]})")
 
 
 def load_imagenet_labels():
