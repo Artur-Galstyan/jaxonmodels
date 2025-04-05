@@ -1,4 +1,4 @@
-from .attention import multi_head_attention_forward
+from .attention import multi_head_attention_forward, shifted_window_attention
 from .initialization import kaiming_init_conv2d
 from .masking import (
     build_attention_mask,
@@ -36,4 +36,5 @@ __all__ = [
     "default_floating_dtype",
     "dtype_to_str",
     "patch_merging_pad",
+    "shifted_window_attention",
 ]
