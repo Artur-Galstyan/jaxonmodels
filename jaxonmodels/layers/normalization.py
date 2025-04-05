@@ -162,3 +162,32 @@ class LocalResponseNormalization(eqx.Module):
 
         ys = eqx.filter_vmap(_body)(jnp.arange(c))
         return ys
+
+
+class LayerNorm2d(eqx.Module):
+    layer_norm: eqx.nn.LayerNorm
+
+    def __init__(
+        self,
+        shape: int | Sequence[int],
+        eps: float = 0.00001,
+        use_weight: bool = True,
+        use_bias: bool = True,
+        dtype: Any | None = None,
+        *,
+        elementwise_affine: bool | None = None,
+    ):
+        self.layer_norm = eqx.nn.LayerNorm(
+            shape,
+            eps,
+            use_weight,
+            use_bias,
+            dtype=dtype,
+            elementwise_affine=elementwise_affine,
+        )
+
+    def __call__(
+        self, x: Float[Array, "h w c"], *, key: PRNGKeyArray | None = None
+    ) -> Float[Array, "h w c"]:
+        x = eqx.filter_vmap(eqx.filter_vmap(self.layer_norm))(x)
+        return x
