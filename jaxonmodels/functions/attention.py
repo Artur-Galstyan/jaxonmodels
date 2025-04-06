@@ -3,9 +3,12 @@ import functools
 import equinox as eqx
 import jax
 import jax.numpy as jnp
+from beartype.typing import Any
 from jaxtyping import Array, Bool, Float, PRNGKeyArray
 
 from jaxonmodels.functions.normalization import normalize
+from jaxonmodels.functions.regularization import dropout as dropout_fn
+from jaxonmodels.functions.utils import default_floating_dtype
 
 
 def multi_head_attention_forward(
@@ -211,6 +214,27 @@ def multi_head_attention_forward(
         return attn_output, None
 
 
+def create_attn_mask(pad_H, pad_W, window_size, shift_size, dtype: Any | None = None):
+    if dtype is None:
+        dtype = default_floating_dtype()
+    assert dtype is not None
+    h_boundaries = jnp.array([pad_H - window_size[0], pad_H - shift_size[0]])
+    w_boundaries = jnp.array([pad_W - window_size[1], pad_W - shift_size[1]])
+
+    h_boundaries = jnp.sort(h_boundaries)
+    w_boundaries = jnp.sort(w_boundaries)
+
+    ii, jj = jnp.indices((pad_H, pad_W))  # ii for rows, jj for columns
+
+    row_region_idx = jnp.searchsorted(h_boundaries, ii, side="right")
+    col_region_idx = jnp.searchsorted(w_boundaries, jj, side="right")
+
+    num_col_regions = len(w_boundaries) + 1
+    attn_mask = row_region_idx * num_col_regions + col_region_idx
+
+    return attn_mask.astype(dtype)
+
+
 def shifted_window_attention(
     x: Float[Array, "H W C"],
     qkv_weight: Float[Array, "in_dim out_dim"],
@@ -225,35 +249,15 @@ def shifted_window_attention(
     proj_bias: Array | None = None,
     logit_scale: Array | None = None,
     inference: bool = False,
+    key: PRNGKeyArray | None = None,
 ) -> Float[Array, "H W C"]:
-    """
-    Window based multi-head self attention (W-MSA) module with relative position bias.
-    It supports both of shifted and non-shifted window.
-    Args:
-        x (Array[H, W, C]): The input tensor or 4-dimensions.
-        qkv_weight (Array[in_dim, out_dim]): The weight tensor of query, key, value.
-        proj_weight (Array[out_dim, out_dim]): The weight tensor of projection.
-        relative_position_bias (Array): The learned relative position
-        bias added to attention.
-        window_size (List[int]): Window size.
-        num_heads (int): Number of attention heads.
-        shift_size (List[int]): Shift size for shifted window attention.
-        attention_dropout (float): Dropout ratio of attention weight. Default: 0.0.
-        dropout (float): Dropout ratio of output. Default: 0.0.
-        qkv_bias (Array[out_dim], optional): The bias tensor of query, key, value.
-        proj_bias (Array[out_dim], optional): The bias tensor of projection.
-        logit_scale (Array[out_dim], optional): Logit scale of cosine attention for
-        Swin Transformer V2
-        inference (bool, optional): Training flag used by the dropout parameters.
-    Returns:
-        Array[H, W, C]: The output tensor after shifted window attention.
-    """
+    if not inference and key is None:
+        raise ValueError("Need key when in training mode")
     H, W, C = x.shape
     to_pad_W = (window_size[1] - W % window_size[1]) % window_size[1]
     to_pad_H = (window_size[0] - H % window_size[0]) % window_size[0]
     x = jnp.pad(x, ((0, to_pad_H), (0, to_pad_W), (0, 0)))
     pad_H, pad_W, _ = x.shape
-    print(f"{to_pad_W=}, {to_pad_H=}, {x.shape=}, {pad_H=}, {pad_W=}")
 
     shift_size = shift_size.copy()
     if window_size[0] >= pad_H:
@@ -261,17 +265,12 @@ def shifted_window_attention(
     if window_size[1] >= pad_W:
         shift_size[1] = 0
 
-    print(window_size, shift_size)
-
     # cyclic shift
     if sum(shift_size) > 0:
         x = jnp.roll(x, shift=(-shift_size[0], -shift_size[1]), axis=(0, 1))
 
-    print(f"{x.shape=}")
-
     # partition windows
     num_windows = (pad_H // window_size[0]) * (pad_W // window_size[1])
-    print(f"{num_windows=}")
     x = jnp.reshape(
         x,
         (
@@ -282,117 +281,94 @@ def shifted_window_attention(
             C,
         ),
     )
-    print(f"{x.shape=}")
     x = jnp.transpose(x, (0, 2, 1, 3, 4)).reshape(
         num_windows, window_size[0] * window_size[1], C
     )
-    print(f"{x.shape=}")
 
     # multi-head attention
     if logit_scale is not None and qkv_bias is not None:
         length = qkv_bias.size // 3
         qkv_bias = qkv_bias.at[length : 2 * length].set(0.0)
-        print(f"{qkv_bias.shape=}")
 
     def linear(x: Array, weight: Array, bias: Array | None):
-        if bias is None:
-            return weight @ x
-        else:
-            return (weight @ x) + bias
+        output = x @ jnp.transpose(weight)  # (in,) @ (in, out) -> (out,)
+        if bias is not None:
+            output = output + bias
+        return output
 
     linear_pt = functools.partial(linear, weight=qkv_weight, bias=qkv_bias)
 
     qkv = eqx.filter_vmap(eqx.filter_vmap(linear_pt))(x)
-    print(f"{qkv.shape=}")
     win_size, patches, _ = qkv.shape
     qkv = jnp.transpose(
         qkv.reshape(win_size, patches, 3, num_heads, C // num_heads), (2, 0, 3, 1, 4)
     )
-    print(f"{qkv.shape=}")
     q, k, v = qkv[0], qkv[1], qkv[2]
-    print(f"{q.shape=}, {k.shape=}, {v.shape=}")
     if logit_scale is not None:
         # cosine attention
-        print(f"{normalize(q, axis=-1).shape=}")
-        print(f"{jnp.transpose(normalize(k, axis=-1), (0, 1, 3, 2)).shape=}")
         attn = normalize(q, axis=-1) @ jnp.transpose(
             normalize(k, axis=-1), (0, 1, 3, 2)
         )
-        print(f"{attn.shape=}")
-        logit_scale = jnp.exp(jnp.minimum(logit_scale, jnp.log(100.0)))
-        print(f"{logit_scale=}")
+        # Clamp the logit scale exponent for stability
+        logit_scale = jnp.exp(jnp.minimum(logit_scale, jnp.log(jnp.array(100.0))))
         attn = attn * logit_scale
-        print(f"{attn.shape=}")
     else:
         q = q * (C // num_heads) ** -0.5
-        print(f"{q.shape=}")
-        attn = q @ (jnp.transpose(normalize(k, axis=-1), (0, 1, 3, 2)))
-        print(f"{attn.shape=}")
+        # attn = q @ (jnp.transpose(normalize(k, axis=-1), (0, 1, 3, 2))) # Incorrect
+        attn = q @ jnp.transpose(k, (0, 1, 3, 2))  # Corrected: q @ k.T
+
     # add relative position bias
     attn = attn + relative_position_bias
-    print(f"{attn.shape=}")
 
     if sum(shift_size) > 0:
-        # generate attention mask
-        attn_mask = jnp.zeros((pad_H, pad_W), dtype=x.dtype)
-        print(f"{attn_mask.shape=}")
-        h_slices = (
-            (0, -window_size[0]),
-            (-window_size[0], -shift_size[0]),
-            (-shift_size[0], None),
+        attn_mask = create_attn_mask(pad_H, pad_W, window_size, shift_size)
+        attn_mask = attn_mask.reshape(
+            pad_H // window_size[0],
+            window_size[0],
+            pad_W // window_size[1],
+            window_size[1],
         )
-        w_slices = (
-            (0, -window_size[1]),
-            (-window_size[1], -shift_size[1]),
-            (-shift_size[1], None),
+        attn_mask = jnp.transpose(attn_mask, (0, 2, 1, 3)).reshape(
+            num_windows, window_size[0] * window_size[1]
         )
-        print(f"{h_slices=}, {w_slices=}")
-    #     count = 0
-    #     for h in h_slices:
-    #         for w in w_slices:
-    #             attn_mask[h[0] : h[1], w[0] : w[1]] = count
-    #             count += 1
-    #     attn_mask = attn_mask.view(
-    #         pad_H // window_size[0],
-    #         window_size[0],
-    #         pad_W // window_size[1],
-    #         window_size[1],
-    #     )
-    #     attn_mask = attn_mask.permute(0, 2, 1, 3).reshape(
-    #         num_windows, window_size[0] * window_size[1]
-    #     )
-    #     attn_mask = attn_mask.unsqueeze(1) - attn_mask.unsqueeze(2)
-    #     attn_mask = attn_mask.masked_fill(attn_mask != 0, float(-100.0)).masked_fill(
-    #         attn_mask == 0, float(0.0)
-    #     )
-    #     attn = attn.view(
-    #         x.size(0) // num_windows, num_windows, num_heads, x.size(1), x.size(1)
-    #     )
-    #     attn = attn + attn_mask.unsqueeze(1).unsqueeze(0)
-    #     attn = attn.view(-1, num_heads, x.size(1), x.size(1))
+        attn_mask = jnp.expand_dims(attn_mask, axis=1) - jnp.expand_dims(
+            attn_mask, axis=2
+        )
+        attn_mask = jnp.where(attn_mask == 0, 0.0, -100.0)
 
-    # attn = F.softmax(attn, dim=-1)
-    # attn = F.dropout(attn, p=attention_dropout, training=training)
+        attn = attn + attn_mask[:, None, :, :]
 
-    # x = attn.matmul(v).transpose(1, 2).reshape(x.size(0), x.size(1), C)
-    # x = F.linear(x, proj_weight, proj_bias)
-    # x = F.dropout(x, p=dropout, training=training)
+    attn = jax.nn.softmax(attn, axis=-1)
+    if not inference:
+        assert key is not None, "key must be given if not inference"
+        key, subkey = jax.random.split(key)
+        attn = dropout_fn(attn, p=attention_dropout, inference=inference, key=subkey)
 
-    # # reverse windows
-    # x = x.view(
-    #     B,
-    #     pad_H // window_size[0],
-    #     pad_W // window_size[1],
-    #     window_size[0],
-    #     window_size[1],
-    #     C,
-    # )
-    # x = x.permute(0, 1, 3, 2, 4, 5).reshape(B, pad_H, pad_W, C)
+    x = jnp.transpose(attn @ v, (0, 2, 1, 3)).reshape(
+        num_windows, window_size[0] * window_size[1], C
+    )
+    linear_pt_proj = functools.partial(linear, weight=proj_weight, bias=proj_bias)
 
-    # # reverse cyclic shift
-    # if sum(shift_size) > 0:
-    #     x = torch.roll(x, shifts=(shift_size[0], shift_size[1]), dims=(1, 2))
+    x = eqx.filter_vmap(eqx.filter_vmap(linear_pt_proj))(x)
+    if not inference:
+        assert key is not None, "key must be given if not inference"
+        key, subkey = jax.random.split(key)
+        x = dropout_fn(x, p=dropout, inference=inference, key=subkey)
 
-    # # unpad features
-    # x = x[:, :H, :W, :].contiguous()
+    # reverse windows
+    x = x.reshape(
+        pad_H // window_size[0],
+        pad_W // window_size[1],
+        window_size[0],
+        window_size[1],
+        C,
+    )
+    x = jnp.transpose(x, (0, 2, 1, 3, 4)).reshape(pad_H, pad_W, C)
+
+    # reverse cyclic shift
+    if sum(shift_size) > 0:
+        x = jnp.roll(x, shift=(shift_size[0], shift_size[1]), axis=(0, 1))
+
+    # unpad features
+    x = x[:H, :W, :]
     return x

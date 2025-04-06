@@ -1,6 +1,7 @@
 import functools as ft
 
 import equinox as eqx
+import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
@@ -906,41 +907,42 @@ def test_mha_with_bias_kv():
 
 
 @pytest.mark.parametrize(
-    "B, H, W, C, window_size, num_heads, shift_size, attention_dropout, dropout, qkv_bias_flag, proj_bias_flag, logit_scale_flag, inference",
+    "B, H, W, C, window_size, num_heads, shift_size, attention_dropout, dropout, qkv_bias_flag, proj_bias_flag, logit_scale_flag, inference",  # noqa
     [
-        # (12, 56, 56, 96, [7, 7], 3, [0, 0], 0.0, 0.0, True, True, True, True),
+        (12, 56, 56, 96, [7, 7], 3, [0, 0], 0.0, 0.0, True, True, True, True),
         # Case 1: Swin-T Stage 1, No Shift
-        # (12, 56, 56, 96, [7, 7], 3, [0, 0], 0.0, 0.0, True, True, False, True),
-        # # Case 2: Swin-T Stage 1, Shift
+        (12, 56, 56, 96, [7, 7], 3, [0, 0], 0.0, 0.0, True, True, False, True),
+        # Case 2: Swin-T Stage 1, Shift
         (12, 56, 56, 96, [7, 7], 3, [3, 3], 0.0, 0.0, True, True, False, True),
-        # # Case 3: Swin-T Stage 2, No Shift
-        # (12, 28, 28, 192, [7, 7], 6, [0, 0], 0.0, 0.0, True, True, False, True),
-        # # Case 4: Swin-T Stage 2, Shift
-        # (12, 28, 28, 192, [7, 7], 6, [3, 3], 0.0, 0.0, True, True, False, True),
-        # # Case 5: Swin-T Stage 3, No Shift
-        # (12, 14, 14, 384, [7, 7], 12, [0, 0], 0.0, 0.0, True, True, False, True),
-        # # Case 6: Swin-T Stage 3, Shift
-        # (12, 14, 14, 384, [7, 7], 12, [3, 3], 0.0, 0.0, True, True, False, True),
-        # # Case 7: Swin-T Stage 4, No Shift
-        # (12, 7, 7, 768, [7, 7], 24, [0, 0], 0.0, 0.0, True, True, False, True),
-        # # Case 8: Swin-T Stage 4, Shift
-        # (12, 7, 7, 768, [7, 7], 24, [3, 3], 0.0, 0.0, True, True, False, True),
-        # # Case 9: NAT Stage 1, No Shift (with logit_scale)
-        # (12, 64, 64, 96, [8, 8], 3, [0, 0], 0.0, 0.0, True, True, True, True),
-        # # Case 10: NAT Stage 1, Shift (with logit_scale)
-        # (12, 64, 64, 96, [8, 8], 3, [4, 4], 0.0, 0.0, True, True, True, True),
-        # # Case 11: NAT Stage 2, No Shift
-        # (12, 32, 32, 192, [8, 8], 6, [0, 0], 0.0, 0.0, True, True, True, True),
-        # # Case 12: NAT Stage 2, Shift
-        # (12, 32, 32, 192, [8, 8], 6, [4, 4], 0.0, 0.0, True, True, True, True),
-        # # Case 13: NAT Stage 3, No Shift
-        # (12, 16, 16, 384, [8, 8], 12, [0, 0], 0.0, 0.0, True, True, True, True),
-        # # Case 14: NAT Stage 3, Shift
-        # (12, 16, 16, 384, [8, 8], 12, [4, 4], 0.0, 0.0, True, True, True, True),
-        # # Case 15: NAT Stage 4, No Shift
-        # (12, 8, 8, 768, [8, 8], 24, [0, 0], 0.0, 0.0, True, True, True, True),
-        # # Case 16: NAT Stage 4, Shift
-        # (12, 8, 8, 768, [8, 8], 24, [4, 4], 0.0, 0.0, True, True, True, True),
+        (1, 56, 56, 96, [7, 7], 3, [3, 3], 0.0, 0.0, True, True, False, True),
+        # Case 3: Swin-T Stage 2, No Shift
+        (12, 28, 28, 192, [7, 7], 6, [0, 0], 0.0, 0.0, True, True, False, True),
+        # Case 4: Swin-T Stage 2, Shift
+        (12, 28, 28, 192, [7, 7], 6, [3, 3], 0.0, 0.0, True, True, False, True),
+        # Case 5: Swin-T Stage 3, No Shift
+        (12, 14, 14, 384, [7, 7], 12, [0, 0], 0.0, 0.0, True, True, False, True),
+        # Case 6: Swin-T Stage 3, Shift
+        (12, 14, 14, 384, [7, 7], 12, [3, 3], 0.0, 0.0, True, True, False, True),
+        # Case 7: Swin-T Stage 4, No Shift
+        (12, 7, 7, 768, [7, 7], 24, [0, 0], 0.0, 0.0, True, True, False, True),
+        # Case 8: Swin-T Stage 4, Shift
+        (12, 7, 7, 768, [7, 7], 24, [3, 3], 0.0, 0.0, True, True, False, True),
+        # Case 9: NAT Stage 1, No Shift (with logit_scale)
+        (12, 64, 64, 96, [8, 8], 3, [0, 0], 0.0, 0.0, True, True, True, True),
+        # Case 10: NAT Stage 1, Shift (with logit_scale)
+        (12, 64, 64, 96, [8, 8], 3, [4, 4], 0.0, 0.0, True, True, True, True),
+        # Case 11: NAT Stage 2, No Shift
+        (12, 32, 32, 192, [8, 8], 6, [0, 0], 0.0, 0.0, True, True, True, True),
+        # Case 12: NAT Stage 2, Shift
+        (12, 32, 32, 192, [8, 8], 6, [4, 4], 0.0, 0.0, True, True, True, True),
+        # Case 13: NAT Stage 3, No Shift
+        (12, 16, 16, 384, [8, 8], 12, [0, 0], 0.0, 0.0, True, True, True, True),
+        # Case 14: NAT Stage 3, Shift
+        (12, 16, 16, 384, [8, 8], 12, [4, 4], 0.0, 0.0, True, True, True, True),
+        # Case 15: NAT Stage 4, No Shift
+        (12, 8, 8, 768, [8, 8], 24, [0, 0], 0.0, 0.0, True, True, True, True),
+        # Case 16: NAT Stage 4, Shift
+        (12, 8, 8, 768, [8, 8], 24, [4, 4], 0.0, 0.0, True, True, True, True),
     ],
 )
 def test_shifted_window_attention(
@@ -981,15 +983,25 @@ def test_shifted_window_attention(
     logit_scale_shape = (num_heads, 1, 1) if logit_scale_flag else None
 
     # Generate random inputs based on parameters
-    input_data = np.random.normal(size=(B, H, W, C))
-    qkv_weight = np.random.uniform(size=qkv_weight_shape)
-    proj_weight = np.random.uniform(size=proj_weight_shape)
-    relative_position_bias = np.random.uniform(size=rpb_shape)
+    input_data = np.random.uniform(low=-1, high=1, size=(B, H, W, C))
+    qkv_weight = np.random.uniform(low=-1, high=1, size=qkv_weight_shape)
+    proj_weight = np.random.uniform(low=-1, high=1, size=proj_weight_shape)
+    relative_position_bias = np.random.uniform(low=-1, high=1, size=rpb_shape)
 
-    qkv_bias = np.random.uniform(size=qkv_bias_shape) if qkv_bias_flag else None
-    proj_bias = np.random.uniform(size=proj_bias_shape) if proj_bias_flag else None
+    qkv_bias = (
+        np.random.uniform(low=-1, high=1, size=qkv_bias_shape)
+        if qkv_bias_flag
+        else None
+    )
+    proj_bias = (
+        np.random.uniform(low=-1, high=1, size=proj_bias_shape)
+        if proj_bias_flag
+        else None
+    )
     logit_scale = (
-        np.random.uniform(size=logit_scale_shape) if logit_scale_flag else None
+        np.random.uniform(low=-1, high=1, size=logit_scale_shape)
+        if logit_scale_flag
+        else None
     )
 
     # Convert numpy arrays to torch tensors
@@ -1050,14 +1062,22 @@ def test_shifted_window_attention(
         proj_bias=jnp.array(proj_bias),
         logit_scale=jnp.array(logit_scale) if logit_scale is not None else None,
         inference=inference,
+        key=jax.random.key(42),
     )
 
     print("========= JAX =========")
     jax_output = eqx.filter_vmap(pt_shifted_window_attention)(jnp.array(input_data))
     print("========= JAX =========")
-    # np.testing.assert_allclose(pt_output.detach().numpy(), jax_output, rtol=1e-5, atol=1e-5)
+
+    assert jax_output.shape == pt_output.shape
+
+    print(jnp.mean(jax_output), torch.mean(pt_output))
+
+    np.testing.assert_allclose(jax_output, pt_output.detach().numpy(), atol=1.5e-2)
 
     # test jitting
     pt_shifted_window_attention = eqx.filter_jit(pt_shifted_window_attention)
 
     jax_output = eqx.filter_vmap(pt_shifted_window_attention)(jnp.array(input_data))
+
+    np.testing.assert_allclose(jax_output, pt_output.detach().numpy(), atol=1.5e-2)

@@ -6,7 +6,7 @@ from .masking import (
     canonical_key_padding_mask,
     canonical_mask,
 )
-from .regularization import stochastic_depth
+from .regularization import dropout, stochastic_depth
 from .state_space import selective_scan
 from .text import (
     SimpleTokenizer,
@@ -30,6 +30,7 @@ __all__ = [
     "stochastic_depth",
     "selective_scan",
     "SimpleTokenizer",
+    "dropout",
     "clip_tokenize",
     "make_divisible",
     "make_ntuple",

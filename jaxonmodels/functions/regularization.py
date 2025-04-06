@@ -1,4 +1,5 @@
 import jax
+import jax.numpy as jnp
 from jaxtyping import Array, PRNGKeyArray
 
 
@@ -24,3 +25,23 @@ def stochastic_depth(
     if survival_rate > 0.0:
         noise = noise / survival_rate
     return input * noise
+
+
+def dropout(
+    x: Array,
+    p: float,
+    inference: bool,
+    key: PRNGKeyArray | None = None,
+) -> Array:
+    if isinstance(p, (int, float)) and p == 0:
+        inference = True
+    if inference:
+        return x
+    elif key is None:
+        raise RuntimeError(
+            "Dropout requires a key when running in non-deterministic mode."
+        )
+    else:
+        q = 1 - jax.lax.stop_gradient(p)
+        mask = jax.random.bernoulli(key, q, x.shape)
+        return jnp.where(mask, x / q, 0)
