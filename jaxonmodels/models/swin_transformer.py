@@ -58,11 +58,11 @@ class PatchMerging(StatefulLayer):
 
 
 class ShiftedWindowAttention(eqx.nn.StatefulLayer):
-    qkv: eqx.nn.Linear
-    proj: eqx.nn.Linear
-
     relative_position_bias_table: Array
     relative_position_index: eqx.nn.StateIndex
+
+    qkv: eqx.nn.Linear
+    proj: eqx.nn.Linear
 
     inference: bool
 
@@ -139,7 +139,9 @@ class ShiftedWindowAttention(eqx.nn.StatefulLayer):
             self.window_size,  # type: ignore[arg-type]
         )
 
-    def __call__(self, x: Array, state: eqx.nn.State) -> Array:
+    def __call__(
+        self, x: Float[Array, "H W C"], state: eqx.nn.State
+    ) -> Float[Array, "H W C"]:
         relative_position_bias = self.get_relative_position_bias(state)
         return shifted_window_attention(
             x,
