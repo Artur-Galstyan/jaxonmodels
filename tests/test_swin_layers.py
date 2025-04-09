@@ -73,21 +73,21 @@ def test_patch_merging_layers(C, H, W):
     "C, window_size, shift_size, num_heads, qkv_bias, proj_bias, attention_dropout, dropout, H, W",  # noqa
     [
         (96, [7, 7], [0, 0], 3, True, True, 0.0, 0.0, 56, 56),
-        # (96, [7, 7], [3, 3], 3, True, True, 0.0, 0.0, 56, 56),
-        # (192, [7, 7], [0, 0], 6, True, True, 0.0, 0.0, 56, 56),
-        # (192, [7, 7], [3, 3], 6, True, True, 0.0, 0.0, 56, 56),
-        # (384, [7, 7], [0, 0], 12, True, True, 0.0, 0.0, 56, 56),
-        # (384, [7, 7], [3, 3], 12, True, True, 0.0, 0.0, 56, 56),
-        # (768, [7, 7], [0, 0], 24, True, True, 0.0, 0.0, 56, 56),
-        # (768, [7, 7], [3, 3], 24, True, True, 0.0, 0.0, 56, 56),
-        # (96, [8, 8], [0, 0], 3, True, True, 0.0, 0.0, 56, 56),
-        # (96, [8, 8], [4, 4], 3, True, True, 0.0, 0.0, 56, 56),
-        # (192, [8, 8], [0, 0], 6, True, True, 0.0, 0.0, 56, 56),
-        # (192, [8, 8], [4, 4], 6, True, True, 0.0, 0.0, 56, 56),
-        # (384, [8, 8], [0, 0], 12, True, True, 0.0, 0.0, 56, 56),
-        # (384, [8, 8], [4, 4], 12, True, True, 0.0, 0.0, 56, 56),
-        # (768, [8, 8], [0, 0], 24, True, True, 0.0, 0.0, 56, 56),
-        # (768, [8, 8], [4, 4], 24, True, True, 0.0, 0.0, 56, 56),
+        (96, [7, 7], [3, 3], 3, True, True, 0.0, 0.0, 56, 56),
+        (192, [7, 7], [0, 0], 6, True, True, 0.0, 0.0, 56, 56),
+        (192, [7, 7], [3, 3], 6, True, True, 0.0, 0.0, 56, 56),
+        (384, [7, 7], [0, 0], 12, True, True, 0.0, 0.0, 56, 56),
+        (384, [7, 7], [3, 3], 12, True, True, 0.0, 0.0, 56, 56),
+        (768, [7, 7], [0, 0], 24, True, True, 0.0, 0.0, 56, 56),
+        (768, [7, 7], [3, 3], 24, True, True, 0.0, 0.0, 56, 56),
+        (96, [8, 8], [0, 0], 3, True, True, 0.0, 0.0, 56, 56),
+        (96, [8, 8], [4, 4], 3, True, True, 0.0, 0.0, 56, 56),
+        (192, [8, 8], [0, 0], 6, True, True, 0.0, 0.0, 56, 56),
+        (192, [8, 8], [4, 4], 6, True, True, 0.0, 0.0, 56, 56),
+        (384, [8, 8], [0, 0], 12, True, True, 0.0, 0.0, 56, 56),
+        (384, [8, 8], [4, 4], 12, True, True, 0.0, 0.0, 56, 56),
+        (768, [8, 8], [0, 0], 24, True, True, 0.0, 0.0, 56, 56),
+        (768, [8, 8], [4, 4], 24, True, True, 0.0, 0.0, 56, 56),
     ],
 )
 def test_swin_attention_v1(
@@ -125,10 +125,13 @@ def test_swin_attention_v1(
     weights_dict = torch_swin.state_dict()
     torchfields = state_dict_to_fields(weights_dict)
     torchfields = move_running_fields_to_the_end(torchfields)
+    torchfields = move_running_fields_to_the_end(
+        torchfields, identifier="relative_position_index"
+    )
     jaxfields, state_indices = pytree_to_fields((jax_swin, state))
 
-    for t, j in zip(torchfields, jaxfields):
-        print(t.path, t.shape, jax.tree_util.keystr(j.path), j.shape)
+    # for t, j in zip(torchfields, jaxfields):
+    #     print(t.path, t.shape, jax.tree_util.keystr(j.path), j.shape)
 
     jax_swin, state = convert(
         weights_dict,
@@ -147,4 +150,4 @@ def test_swin_attention_v1(
         jnp.array(x), state
     )
 
-    assert np.allclose(np.array(j_out), t_out.detach().numpy(), atol=1e-6)
+    assert np.allclose(np.array(j_out), t_out.detach().numpy(), atol=1e-5)

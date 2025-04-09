@@ -141,7 +141,7 @@ class ShiftedWindowAttention(eqx.nn.StatefulLayer):
 
     def __call__(
         self, x: Float[Array, "H W C"], state: eqx.nn.State
-    ) -> Float[Array, "H W C"]:
+    ) -> tuple[Float[Array, "H W C"], eqx.nn.State]:
         relative_position_bias = self.get_relative_position_bias(state)
         return shifted_window_attention(
             x,
@@ -156,4 +156,4 @@ class ShiftedWindowAttention(eqx.nn.StatefulLayer):
             qkv_bias=self.qkv.bias,
             proj_bias=self.proj.bias,
             inference=self.inference,
-        )
+        ), state
