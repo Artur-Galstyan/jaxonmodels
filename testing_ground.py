@@ -64,6 +64,7 @@ def inference_swin_v1(image_path):
 
 
 def inference_swin_v2(image_path):
+    print("SWIN V2")
     """Perform inference using Swin Transformer V2."""
     # Load pre-trained Swin Transformer V2 model
     weights = Swin_V2_T_Weights.DEFAULT
