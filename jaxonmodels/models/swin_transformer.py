@@ -1,3 +1,5 @@
+import functools
+
 import equinox as eqx
 import jax
 import jax.numpy as jnp
@@ -6,6 +8,7 @@ from equinox.nn import StatefulLayer
 from jaxtyping import Array, Float, PRNGKeyArray
 
 from jaxonmodels.functions import patch_merging_pad, shifted_window_attention
+from jaxonmodels.functions.utils import default_floating_dtype
 from jaxonmodels.layers.regularization import StochasticDepth
 
 
@@ -416,4 +419,164 @@ class SwinTransformerBlock(eqx.Module):
         x_norm = eqx.filter_vmap(eqx.filter_vmap(self.norm2))(x)  # pyright: ignore
         mlp_o, state = self.mlp(x_norm, state)  # pyright: ignore
         x = x + self.stochastic_depth(mlp_o, key=subkey)
+        return x, state
+
+
+class SwinTransformerBlockV2(SwinTransformerBlock):
+    def __init__(
+        self,
+        dim: int,
+        num_heads: int,
+        window_size: list[int],
+        shift_size: list[int],
+        mlp_ratio: float,
+        dropout: float,
+        attention_dropout: float,
+        stochastic_depth_prob: float,
+        norm_layer: Callable[..., eqx.Module],
+        attn_layer: Callable[..., eqx.Module],
+        key: PRNGKeyArray,
+        inference: bool,
+        dtype: Any,
+    ):
+        super().__init__(
+            dim=dim,
+            num_heads=num_heads,
+            window_size=window_size,
+            shift_size=shift_size,
+            mlp_ratio=mlp_ratio,
+            dropout=dropout,
+            attention_dropout=attention_dropout,
+            stochastic_depth_prob=stochastic_depth_prob,
+            norm_layer=norm_layer,
+            attn_layer=attn_layer,
+            key=key,
+            inference=inference,
+            dtype=dtype,
+        )
+
+    def __call__(
+        self, x: Float[Array, "H W C"], state: eqx.nn.State, key: PRNGKeyArray
+    ) -> tuple[Array, eqx.nn.State]:
+        key, subkey = jax.random.split(key)
+
+        # Apply attention first, then norm (different from V1)
+        attn, state = self.attn(x, state)  # pyright: ignore
+        attn_norm = eqx.filter_vmap(eqx.filter_vmap(self.norm1))(attn)  # pyright: ignore
+        x = x + self.stochastic_depth(attn_norm, key=key)  # pyright: ignore
+
+        # Apply MLP first, then norm (different from V1)
+        mlp_o, state = self.mlp(x, state)  # pyright: ignore
+        mlp_norm = eqx.filter_vmap(eqx.filter_vmap(self.norm2))(mlp_o)  # pyright: ignore
+        x = x + self.stochastic_depth(mlp_norm, key=subkey)
+
+        return x, state
+
+
+class SwinTransformer(eqx.Module):
+    def __init__(
+        self,
+        patch_size: list[int],
+        embed_dim: int,
+        depths: list[int],
+        num_heads: list[int],
+        window_size: list[int],
+        mlp_ratio: float,
+        dropout: float,
+        attention_dropout: float,
+        stochastic_depth_prob: float,
+        num_classes: int,
+        norm_layer: Callable[..., eqx.Module] | None,
+        block: Callable[..., eqx.Module] | None,
+        downsample_layer: Callable[..., eqx.Module],
+        attn_layer: Callable[..., eqx.Module],
+        inference: bool,
+        key: PRNGKeyArray,
+        dtype: Any | None = None,
+    ):
+        if dtype is None:
+            dtype = default_floating_dtype()
+        assert dtype is not None
+        if block is None:
+            block = SwinTransformerBlock
+        if norm_layer is None:
+            norm_layer = functools.partial(eqx.nn.LayerNorm, eps=1e-5, dtype=dtype)
+
+        layers = []
+        # split image into non-overlapping patches
+        key, subkey = jax.random.split(key)
+        fn = functools.partial(jnp.transpose, axes=[1, 2, 0])
+        layers.append(
+            eqx.nn.Sequential(
+                [
+                    eqx.nn.Conv2d(
+                        3,
+                        embed_dim,
+                        kernel_size=(patch_size[0], patch_size[1]),
+                        stride=(patch_size[0], patch_size[1]),
+                        key=subkey,
+                    ),
+                    eqx.nn.Lambda(fn=fn),
+                    norm_layer(embed_dim),  # pyright: ignore
+                ],
+            )
+        )
+
+        total_stage_blocks = sum(depths)
+        stage_block_id = 0
+        # build SwinTransformer blocks
+        for i_stage in range(len(depths)):
+            stage = []
+            dim = embed_dim * 2**i_stage
+            for i_layer in range(depths[i_stage]):
+                sd_prob = (
+                    stochastic_depth_prob
+                    * float(stage_block_id)
+                    / (total_stage_blocks - 1)
+                )
+                key, subkey = jax.random.split(key)
+                stage.append(
+                    block(
+                        dim,
+                        num_heads[i_stage],
+                        window_size=window_size,
+                        shift_size=[
+                            0 if i_layer % 2 == 0 else w // 2 for w in window_size
+                        ],
+                        mlp_ratio=mlp_ratio,
+                        dropout=dropout,
+                        attention_dropout=attention_dropout,
+                        stochastic_depth_prob=sd_prob,
+                        norm_layer=norm_layer,
+                        key=key,
+                        dtype=dtype,
+                        inference=inference,
+                        attn_layer=attn_layer,
+                    )
+                )
+                stage_block_id += 1
+            layers.append(eqx.nn.Sequential(stage))
+            # add patch merging layer
+            if i_stage < (len(depths) - 1):
+                layers.append(downsample_layer(dim, norm_layer))
+        self.features = eqx.nn.Sequential(layers)
+
+        num_features = embed_dim * 2 ** (len(depths) - 1)
+        self.norm = norm_layer(num_features)
+        # self.permute = Permute([0, 3, 1, 2])  # B H W C -> B C H W
+        self.avgpool = eqx.nn.AdaptiveAvgPool2d(1)
+        key, subkey = jax.random.split(key)
+        self.head = eqx.nn.Linear(num_features, num_classes, key=subkey, dtype=dtype)
+
+        # todo: init properly
+
+    def __call__(
+        self, x: Array, state: eqx.nn.State, key: PRNGKeyArray
+    ) -> tuple[Array, eqx.nn.State]:
+        x, state = self.features(x, state)
+        x = self.norm(x)  # pyright: ignore
+        x = jnp.transpose(x, (2, 0, 1))
+        x = self.avgpool(x)
+        x = jnp.ravel(x)
+        x = self.head(x)
         return x, state
