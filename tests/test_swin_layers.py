@@ -13,6 +13,9 @@ from torchvision.models.swin_transformer import (
 from torchvision.models.swin_transformer import (
     ShiftedWindowAttentionV2 as TorchShiftedWindowAttentionV2,
 )
+from torchvision.models.swin_transformer import (
+    SwinTransformerBlock as TorchSwinTransformerBlock,
+)
 
 from jaxonmodels.functions import default_floating_dtype
 from jaxonmodels.layers import LayerNorm2d
@@ -20,6 +23,7 @@ from jaxonmodels.models.swin_transformer import (
     PatchMerging,
     ShiftedWindowAttention,
     ShiftedWindowAttentionV2,
+    SwinTransformerBlock,
 )
 from jaxonmodels.statedict2pytree.s2p import (
     convert,
@@ -242,3 +246,113 @@ def test_swin_attention_v2(
     )
 
     assert np.allclose(np.array(j_out), t_out.detach().numpy(), atol=1e-5)
+
+
+@pytest.mark.parametrize(
+    "dim, num_heads, window_size, shift_size, mlp_ratio, qkv_bias, proj_bias, dropout, attention_dropout, stochastic_depth_prob, H, W",  # noqa
+    [
+        (96, 3, [7, 7], [0, 0], 4.0, True, True, 0.0, 0.0, 0.0, 56, 56),
+        (96, 3, [7, 7], [3, 3], 4.0, True, True, 0.0, 0.0, 0.01818, 56, 56),
+        (192, 6, [7, 7], [0, 0], 4.0, True, True, 0.0, 0.0, 0.0363636, 28, 28),
+        (192, 6, [7, 7], [3, 3], 4.0, True, True, 0.0, 0.0, 0.0545456, 28, 28),
+        (384, 12, [7, 7], [0, 0], 4.0, True, True, 0.0, 0.0, 0.072727, 14, 14),
+        (384, 12, [7, 7], [3, 3], 4.0, True, True, 0.0, 0.0, 0.090909, 14, 14),
+        (384, 12, [7, 7], [0, 0], 4.0, True, True, 0.0, 0.0, 0.109090, 14, 14),
+        (384, 12, [7, 7], [3, 3], 4.0, True, True, 0.0, 0.0, 0.127272, 14, 14),
+        (384, 12, [7, 7], [0, 0], 4.0, True, True, 0.0, 0.0, 0.145454, 14, 14),
+        (384, 12, [7, 7], [3, 3], 4.0, True, True, 0.0, 0.0, 0.163636, 14, 14),
+        (768, 24, [7, 7], [0, 0], 4.0, True, True, 0.0, 0.0, 0.181818, 7, 7),
+        (768, 24, [7, 7], [3, 3], 4.0, True, True, 0.0, 0.0, 0.2, 7, 7),
+    ],
+)
+def test_swin_transformer_block(
+    dim,
+    num_heads,
+    window_size,
+    shift_size,
+    mlp_ratio,
+    qkv_bias,
+    proj_bias,
+    dropout,
+    attention_dropout,
+    stochastic_depth_prob,
+    H,
+    W,
+):
+    batch_size = 2
+    dtype = default_floating_dtype()
+    key = jax.random.key(43)
+    torch.manual_seed(42)
+    np.random.seed(42)
+
+    # --- PyTorch Model ---
+
+    torch_block = TorchSwinTransformerBlock(
+        dim=dim,
+        num_heads=num_heads,
+        window_size=window_size,
+        shift_size=shift_size,
+        mlp_ratio=mlp_ratio,
+        dropout=dropout,
+        attention_dropout=attention_dropout,
+        stochastic_depth_prob=stochastic_depth_prob,
+        norm_layer=torch.nn.LayerNorm,
+        attn_layer=TorchShiftedWindowAttentionV1,
+    )
+    torch_block.eval()
+
+    # --- JAX Model ---
+    #  Always use the V1 attention module.
+    jax_block, state = eqx.nn.make_with_state(SwinTransformerBlock)(
+        dim=dim,
+        num_heads=num_heads,
+        window_size=window_size,
+        shift_size=shift_size,
+        mlp_ratio=mlp_ratio,
+        dropout=dropout,
+        attention_dropout=attention_dropout,
+        stochastic_depth_prob=stochastic_depth_prob,
+        norm_layer=functools.partial(eqx.nn.LayerNorm, eps=1e-05),
+        attn_layer=ShiftedWindowAttention,
+        inference=False,
+        dtype=dtype,
+        key=key,
+    )
+    jax_block, state = eqx.nn.inference_mode((jax_block, state))
+
+    # --- Weight Conversion ---
+    weights_dict = torch_block.state_dict()
+    torchfields = state_dict_to_fields(weights_dict)
+    torchfields = move_running_fields_to_the_end(torchfields)
+    torchfields = move_running_fields_to_the_end(
+        torchfields,
+        identifier="relative_position_index",
+    )
+
+    jaxfields, state_indices = pytree_to_fields(
+        (
+            jax_block,
+            state,
+        )
+    )
+
+    jax_block, state = convert(
+        weights_dict,
+        (jax_block, state),
+        jaxfields,
+        state_indices,
+        torchfields,
+    )
+
+    # --- Inference and Comparison ---
+    x_np = np.array(np.random.uniform(size=(batch_size, H, W, dim)), dtype=np.float32)
+    x_torch = torch.from_numpy(x_np)
+    x_jax = jnp.array(x_np)
+
+    t_out = torch_block(x_torch)
+    jax_block_pt = functools.partial(jax_block, key=jax.random.key(2100))
+    j_out, state = eqx.filter_vmap(jax_block_pt, in_axes=(0, None), out_axes=(0, None))(
+        x_jax, state
+    )
+
+    assert np.allclose(np.array(j_out), t_out.detach().numpy(), atol=1e-3)

@@ -5,8 +5,8 @@ from beartype.typing import Any, Callable
 from equinox.nn import StatefulLayer
 from jaxtyping import Array, Float, PRNGKeyArray
 
-from jaxonmodels.functions import patch_merging_pad
-from jaxonmodels.functions.attention import shifted_window_attention
+from jaxonmodels.functions import patch_merging_pad, shifted_window_attention
+from jaxonmodels.layers.regularization import StochasticDepth
 
 
 def get_relative_position_bias(
@@ -19,6 +19,64 @@ def get_relative_position_bias(
     relative_position_bias = relative_position_bias.reshape(N, N, -1)
     relative_position_bias = jnp.transpose(relative_position_bias, (2, 0, 1))
     return relative_position_bias
+
+
+class MLPWithDropout(eqx.nn.StatefulLayer):
+    layers: list[eqx.Module]
+
+    def __init__(
+        self,
+        in_channels: int,
+        hidden_channels: list[int],
+        key: PRNGKeyArray,
+        norm_layer: Callable | None,
+        activation: Callable | None,
+        use_bias: bool,
+        dropout: float,
+        inference: bool,
+        dtype: Any,
+    ):
+        assert dtype is not None
+
+        key, *subkeys = jax.random.split(key, len(hidden_channels) + 1)
+        layers = []
+        in_dim = in_channels
+        for i, hidden_dim in enumerate(hidden_channels[:-1]):
+            layers.append(
+                eqx.nn.Linear(
+                    in_dim, hidden_dim, use_bias=use_bias, key=subkeys[i], dtype=dtype
+                )
+            )
+            if norm_layer is not None:
+                layers.append(norm_layer(hidden_dim))
+            layers.append(
+                eqx.nn.Lambda(fn=activation if activation is not None else lambda x: x)
+            )
+            layers.append(eqx.nn.Dropout(dropout, inference=inference))
+            in_dim = hidden_dim
+
+        layers.append(
+            eqx.nn.Linear(
+                in_dim,
+                hidden_channels[-1],
+                use_bias=use_bias,
+                dtype=dtype,
+                key=subkeys[-1],
+            )
+        )
+        layers.append(eqx.nn.Dropout(dropout, inference=inference))
+        self.layers = layers
+
+    def __call__(
+        self, x: Float[Array, "H W C"], state: eqx.nn.State
+    ) -> tuple[Array, eqx.nn.State]:
+        for layer in self.layers:
+            if isinstance(layer, eqx.nn.StatefulLayer):
+                x, state = layer(x, state)
+            else:
+                x = eqx.filter_vmap(eqx.filter_vmap(layer))(x)  # pyright: ignore
+
+        return x, state
 
 
 class PatchMerging(StatefulLayer):
@@ -289,3 +347,73 @@ class ShiftedWindowAttentionV2(ShiftedWindowAttention):
             logit_scale=self.logit_scale,
             inference=self.inference,
         ), state
+
+
+class SwinTransformerBlock(eqx.Module):
+    norm1: eqx.Module
+    attn: eqx.Module
+
+    stochastic_depth: StochasticDepth
+    norm2: eqx.Module
+    mlp: MLPWithDropout
+
+    def __init__(
+        self,
+        dim: int,
+        num_heads: int,
+        window_size: list[int],
+        shift_size: list[int],
+        mlp_ratio: float,
+        dropout: float,
+        attention_dropout: float,
+        stochastic_depth_prob: float,
+        norm_layer: Callable[..., eqx.Module],
+        attn_layer: Callable[..., eqx.Module],
+        key: PRNGKeyArray,
+        inference: bool,
+        dtype: Any,
+    ):
+        self.norm1 = norm_layer(dim)
+        key, subkey = jax.random.split(key)
+        self.attn = attn_layer(
+            dim,
+            window_size,
+            shift_size,
+            num_heads,
+            attention_dropout=attention_dropout,
+            dropout=dropout,
+            qkv_bias=True,
+            proj_bias=True,
+            key=subkey,
+            inference=inference,
+            dtype=dtype,
+        )
+        self.stochastic_depth = StochasticDepth(
+            stochastic_depth_prob, "row", inference=inference
+        )
+        self.norm2 = norm_layer(dim)
+        self.mlp = MLPWithDropout(
+            dim,
+            [int(dim * mlp_ratio), dim],
+            norm_layer=None,
+            use_bias=True,
+            activation=jax.nn.gelu,
+            dropout=dropout,
+            inference=inference,
+            key=key,
+            dtype=dtype,
+        )
+
+        # todo: init properly
+
+    def __call__(
+        self, x: Float[Array, "H W C"], state: eqx.nn.State, key: PRNGKeyArray
+    ) -> tuple[Array, eqx.nn.State]:
+        key, subkey = jax.random.split(key)
+        x_norm = eqx.filter_vmap(eqx.filter_vmap(self.norm1))(x)  # pyright: ignore
+        attn, state = self.attn(x_norm, state)  # pyright: ignore
+        x = x + self.stochastic_depth(attn, key=key)  # pyright: ignore
+        x_norm = eqx.filter_vmap(eqx.filter_vmap(self.norm2))(x)  # pyright: ignore
+        mlp_o, state = self.mlp(x_norm, state)  # pyright: ignore
+        x = x + self.stochastic_depth(mlp_o, key=subkey)
+        return x, state
