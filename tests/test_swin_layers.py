@@ -13,6 +13,7 @@ from torchvision.models.swin_transformer import (
 from torchvision.models.swin_transformer import (
     ShiftedWindowAttentionV2 as TorchShiftedWindowAttentionV2,
 )
+from torchvision.models.swin_transformer import SwinTransformer as TorchSwinTransformer
 from torchvision.models.swin_transformer import (
     SwinTransformerBlock as TorchSwinTransformerBlock,
 )
@@ -26,6 +27,7 @@ from jaxonmodels.models.swin_transformer import (
     PatchMerging,
     ShiftedWindowAttention,
     ShiftedWindowAttentionV2,
+    SwinTransformer,
     SwinTransformerBlock,
     SwinTransformerBlockV2,
 )
@@ -468,3 +470,96 @@ def test_swin_transformer_blockv2(
     )
 
     assert np.allclose(np.array(j_out), t_out.detach().numpy(), atol=1e-3)
+
+
+def test_swinv1():
+    patch_size = [4, 4]
+    embed_dim = 96
+    depths = [2, 2, 6, 2]
+    num_heads = [3, 6, 12, 24]
+    window_size = [7, 7]
+    mlp_ratio = 4.0
+    dropout = 0.0
+    attention_dropout = 0.0
+    stochastic_depth_prob = 0.2
+    num_classes = 1000
+
+    torch_swin = TorchSwinTransformer(
+        patch_size,
+        embed_dim,
+        depths,
+        num_heads,
+        window_size,
+        mlp_ratio,
+        dropout,
+        attention_dropout,
+        stochastic_depth_prob,
+        num_classes,
+        block=TorchSwinTransformerBlock,
+    )
+    torch_swin.eval()
+    np.random.seed(42)
+
+    x = np.array(np.random.normal(size=(1, 3, 224, 224)), dtype=np.float32)
+
+    x_t = torch.Tensor(x)
+
+    jax_swin, state = eqx.nn.make_with_state(SwinTransformer)(
+        patch_size,
+        embed_dim,
+        depths,
+        num_heads,
+        window_size,
+        mlp_ratio,
+        dropout,
+        attention_dropout,
+        stochastic_depth_prob,
+        num_classes,
+        norm_layer=None,
+        block=SwinTransformerBlock,
+        downsample_layer=PatchMerging,
+        attn_layer=ShiftedWindowAttention,
+        axis_name="batch",
+        inference=True,
+        key=jax.random.key(42),
+    )
+    jax_swin, state = eqx.nn.inference_mode((jax_swin, state))
+
+    weights_dict = torch_swin.state_dict()
+    torchfields = state_dict_to_fields(weights_dict)
+    torchfields = move_running_fields_to_the_end(torchfields)
+    torchfields = move_running_fields_to_the_end(
+        torchfields,
+        identifier="relative_position_index",
+    )
+    torchfields = move_running_fields_to_the_end(
+        torchfields,
+        identifier="relative_coords_table",
+    )
+
+    jaxfields, state_indices = pytree_to_fields(
+        (
+            jax_swin,
+            state,
+        )
+    )
+
+    jax_swin, state = convert(
+        weights_dict,
+        (jax_swin, state),
+        jaxfields,
+        state_indices,
+        torchfields,
+    )
+
+    key = jax.random.key(22)
+    jax_swin_pt = functools.partial(jax_swin, key=key)
+    jax_out, state = eqx.filter_vmap(
+        jax_swin_pt, in_axes=(0, None), out_axes=(0, None), axis_name="batch"
+    )(jnp.array(x), state)
+
+    t_out = torch_swin.forward(x_t).detach().numpy()
+
+    jax_out = np.array(jax_out)
+
+    assert np.allclose(jax_out, t_out, atol=1e-3)

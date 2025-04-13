@@ -9,7 +9,7 @@ from jaxtyping import Array, Float, PRNGKeyArray
 
 from jaxonmodels.functions import patch_merging_pad, shifted_window_attention
 from jaxonmodels.functions.utils import default_floating_dtype
-from jaxonmodels.layers.regularization import StochasticDepth
+from jaxonmodels.layers import LayerNorm, StochasticDepth
 
 
 def get_relative_position_bias(
@@ -104,18 +104,19 @@ class PatchMerging(StatefulLayer):
         self.norm = norm_layer()
 
     def __call__(
-        self, x: Float[Array, "H W C"], state: eqx.nn.State
+        self,
+        x: Float[Array, "H W C"],
+        state: eqx.nn.State,
+        *,
+        key: PRNGKeyArray | None = None,
     ) -> tuple[Float[Array, "H/2 W/2 C*2"], eqx.nn.State]:
         x = patch_merging_pad(x)
-        if self.is_stateful():
+        if isinstance(self.norm, StatefulLayer):
             x, state = self.norm(x, state=state)  # pyright: ignore
         else:
             x = self.norm(x)  # pyright: ignore
         x = eqx.filter_vmap(eqx.filter_vmap(self.reduction))(x)  # ... H/2 W/2 2*C
         return x, state
-
-    def is_stateful(self) -> bool:
-        return True if isinstance(self.norm, StatefulLayer) else False
 
 
 class ShiftedWindowAttention(eqx.nn.StatefulLayer):
@@ -352,7 +353,7 @@ class ShiftedWindowAttentionV2(ShiftedWindowAttention):
         ), state
 
 
-class SwinTransformerBlock(eqx.Module):
+class SwinTransformerBlock(StatefulLayer):
     norm1: eqx.Module
     attn: eqx.Module
 
@@ -474,6 +475,11 @@ class SwinTransformerBlockV2(SwinTransformerBlock):
 
 
 class SwinTransformer(eqx.Module):
+    features: eqx.nn.Sequential
+    norm: eqx.Module
+    avgpool: eqx.nn.AdaptiveAvgPool2d
+    head: eqx.nn.Linear
+
     def __init__(
         self,
         patch_size: list[int],
@@ -490,6 +496,7 @@ class SwinTransformer(eqx.Module):
         block: Callable[..., eqx.Module] | None,
         downsample_layer: Callable[..., eqx.Module],
         attn_layer: Callable[..., eqx.Module],
+        axis_name: str,
         inference: bool,
         key: PRNGKeyArray,
         dtype: Any | None = None,
@@ -500,7 +507,7 @@ class SwinTransformer(eqx.Module):
         if block is None:
             block = SwinTransformerBlock
         if norm_layer is None:
-            norm_layer = functools.partial(eqx.nn.LayerNorm, eps=1e-5, dtype=dtype)
+            norm_layer = functools.partial(LayerNorm, eps=1e-5, dtype=dtype)
 
         layers = []
         # split image into non-overlapping patches
@@ -515,6 +522,7 @@ class SwinTransformer(eqx.Module):
                         kernel_size=(patch_size[0], patch_size[1]),
                         stride=(patch_size[0], patch_size[1]),
                         key=subkey,
+                        dtype=dtype,
                     ),
                     eqx.nn.Lambda(fn=fn),
                     norm_layer(embed_dim),  # pyright: ignore
@@ -548,17 +556,27 @@ class SwinTransformer(eqx.Module):
                         attention_dropout=attention_dropout,
                         stochastic_depth_prob=sd_prob,
                         norm_layer=norm_layer,
-                        key=key,
-                        dtype=dtype,
-                        inference=inference,
                         attn_layer=attn_layer,
+                        key=key,
+                        inference=inference,
+                        dtype=dtype,
                     )
                 )
                 stage_block_id += 1
             layers.append(eqx.nn.Sequential(stage))
             # add patch merging layer
             if i_stage < (len(depths) - 1):
-                layers.append(downsample_layer(dim, norm_layer))
+                key, subkey = jax.random.split(key)
+                layers.append(
+                    downsample_layer(
+                        dim,
+                        functools.partial(norm_layer, 4 * dim),
+                        dtype=dtype,
+                        axis_name=axis_name,
+                        inference=inference,
+                        key=subkey,
+                    )
+                )
         self.features = eqx.nn.Sequential(layers)
 
         num_features = embed_dim * 2 ** (len(depths) - 1)
@@ -573,8 +591,8 @@ class SwinTransformer(eqx.Module):
     def __call__(
         self, x: Array, state: eqx.nn.State, key: PRNGKeyArray
     ) -> tuple[Array, eqx.nn.State]:
-        x, state = self.features(x, state)
-        x = self.norm(x)  # pyright: ignore
+        x, state = self.features(x, state, key=key)
+        x = eqx.filter_vmap(eqx.filter_vmap(self.norm))(x)  # pyright: ignore
         x = jnp.transpose(x, (2, 0, 1))
         x = self.avgpool(x)
         x = jnp.ravel(x)
