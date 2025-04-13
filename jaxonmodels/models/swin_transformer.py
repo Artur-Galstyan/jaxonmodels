@@ -109,7 +109,7 @@ class PatchMerging(StatefulLayer):
         state: eqx.nn.State,
         *,
         key: PRNGKeyArray | None = None,
-    ) -> tuple[Float[Array, "H/2 W/2 C*2"], eqx.nn.State]:
+    ) -> tuple[Float[Array, "H_half W_half C*2"], eqx.nn.State]:
         x = patch_merging_pad(x)
         if isinstance(self.norm, StatefulLayer):
             x, state = self.norm(x, state=state)  # pyright: ignore
