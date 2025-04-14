@@ -7,6 +7,7 @@ import numpy as np
 import pytest
 import torch
 from torchvision.models.swin_transformer import PatchMerging as TorchPatchMerging
+from torchvision.models.swin_transformer import PatchMergingV2 as TorchPatchMergingV2
 from torchvision.models.swin_transformer import (
     ShiftedWindowAttention as TorchShiftedWindowAttentionV1,
 )
@@ -25,6 +26,7 @@ from jaxonmodels.functions import default_floating_dtype
 from jaxonmodels.layers import LayerNorm2d
 from jaxonmodels.models.swin_transformer import (
     PatchMerging,
+    PatchMergingV2,
     ShiftedWindowAttention,
     ShiftedWindowAttentionV2,
     SwinTransformer,
@@ -54,9 +56,8 @@ def test_patch_merging_layers(C, H, W):
     torch_patch = TorchPatchMerging(dim=C)
     jax_patch, state = eqx.nn.make_with_state(PatchMerging)(
         dim=C,
-        norm_layer=functools.partial(LayerNorm2d, shape=4 * C, dtype=dtype),
+        norm_layer=functools.partial(LayerNorm2d, dtype=dtype),
         inference=False,
-        axis_name=None,
         dtype=dtype,
         key=jax.random.key(42),
     )
@@ -519,7 +520,6 @@ def test_swinv1():
         block=SwinTransformerBlock,
         downsample_layer=PatchMerging,
         attn_layer=ShiftedWindowAttention,
-        axis_name="batch",
         inference=True,
         key=jax.random.key(42),
     )
@@ -578,6 +578,7 @@ def test_swinv2():
         attention_dropout,
         stochastic_depth_prob,
         num_classes,
+        downsample_layer=TorchPatchMergingV2,
         block=TorchSwinTransformerBlockV2,
     )
     torch_swin.eval()
@@ -600,9 +601,8 @@ def test_swinv2():
         num_classes,
         norm_layer=None,
         block=SwinTransformerBlockV2,
-        downsample_layer=PatchMerging,
+        downsample_layer=PatchMergingV2,
         attn_layer=ShiftedWindowAttentionV2,
-        axis_name="batch",
         inference=True,
         key=jax.random.key(42),
     )
@@ -615,6 +615,10 @@ def test_swinv2():
             state,
         )
     )
+
+    # Print zipped jaxfields and torchfields for debugging
+    for t, j in zip(torchfields, jaxfields):
+        print(t.path, t.shape, jax.tree_util.keystr(j.path), j.shape)
 
     jax_swin, state = convert(
         weights_dict,

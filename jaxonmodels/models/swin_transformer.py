@@ -1,15 +1,34 @@
 import functools
+import os
+from pathlib import Path
+from urllib.request import urlretrieve
 
 import equinox as eqx
 import jax
 import jax.numpy as jnp
-from beartype.typing import Any, Callable
+from beartype.typing import Any, Callable, Literal
 from equinox.nn import StatefulLayer
-from jaxtyping import Array, Float, PRNGKeyArray
+from jaxtyping import Array, Float, PRNGKeyArray, PyTree
 
 from jaxonmodels.functions import patch_merging_pad, shifted_window_attention
-from jaxonmodels.functions.utils import default_floating_dtype
+from jaxonmodels.functions.utils import default_floating_dtype, dtype_to_str
 from jaxonmodels.layers import LayerNorm, StochasticDepth
+from jaxonmodels.statedict2pytree.model_orders import get_swin_model_order
+from jaxonmodels.statedict2pytree.s2p import (
+    convert,
+    pytree_to_fields,
+    serialize_pytree,
+    state_dict_to_fields,
+)
+
+_SWIN_MODELS = {
+    "swin_t_IMAGENET1K_V1": "https://download.pytorch.org/models/swin_t-704ceda3.pth",
+    "swin_s_IMAGENET1K_V1": "https://download.pytorch.org/models/swin_s-5e29d889.pth",
+    "swin_b_IMAGENET1K_V1": "https://download.pytorch.org/models/swin_b-68c6b09e.pth",
+    "swin_v2_t_IMAGENET1K_V1": "https://download.pytorch.org/models/swin_v2_t-b137f0e2.pth",
+    "swin_v2_s_IMAGENET1K_V1": "https://download.pytorch.org/models/swin_v2_s-637d8ceb.pth",
+    "swin_v2_b_IMAGENET1K_V1": "https://download.pytorch.org/models/swin_v2_b-781e5279.pth",
+}
 
 
 def get_relative_position_bias(
@@ -93,7 +112,6 @@ class PatchMerging(StatefulLayer):
         dim: int,
         norm_layer: Callable[..., eqx.Module],
         inference: bool,
-        axis_name: str | None,
         key: PRNGKeyArray,
         dtype: Any,
     ):
@@ -101,7 +119,7 @@ class PatchMerging(StatefulLayer):
         self.reduction = eqx.nn.Linear(
             4 * dim, 2 * dim, use_bias=False, key=key, dtype=dtype
         )
-        self.norm = norm_layer()
+        self.norm = norm_layer(4 * dim)
 
     def __call__(
         self,
@@ -116,6 +134,42 @@ class PatchMerging(StatefulLayer):
         else:
             x = self.norm(x)  # pyright: ignore
         x = eqx.filter_vmap(eqx.filter_vmap(self.reduction))(x)  # ... H/2 W/2 2*C
+        return x, state
+
+
+class PatchMergingV2(StatefulLayer):
+    reduction: eqx.nn.Linear
+    norm: eqx.Module
+
+    inference: bool
+
+    def __init__(
+        self,
+        dim: int,
+        norm_layer: Callable[..., eqx.Module],
+        inference: bool,
+        key: PRNGKeyArray,
+        dtype: Any,
+    ):
+        self.inference = inference
+        self.reduction = eqx.nn.Linear(
+            4 * dim, 2 * dim, use_bias=False, key=key, dtype=dtype
+        )
+        self.norm = norm_layer(2 * dim)
+
+    def __call__(
+        self,
+        x: Float[Array, "H W C"],
+        state: eqx.nn.State,
+        *,
+        key: PRNGKeyArray | None = None,
+    ) -> tuple[Float[Array, "H_half W_half C*2"], eqx.nn.State]:
+        x = patch_merging_pad(x)
+        x = eqx.filter_vmap(eqx.filter_vmap(self.reduction))(x)  # ... H/2 W/2 2*C
+        if isinstance(self.norm, StatefulLayer):
+            x, state = self.norm(x, state=state)  # pyright: ignore
+        else:
+            x = self.norm(x)  # pyright: ignore
         return x, state
 
 
@@ -498,7 +552,6 @@ class SwinTransformer(eqx.Module):
         block: Callable[..., eqx.Module] | None,
         downsample_layer: Callable[..., eqx.Module],
         attn_layer: Callable[..., eqx.Module],
-        axis_name: str,
         inference: bool,
         key: PRNGKeyArray,
         dtype: Any | None = None,
@@ -576,9 +629,8 @@ class SwinTransformer(eqx.Module):
                 layers.append(
                     downsample_layer(
                         dim,
-                        functools.partial(norm_layer, 4 * dim),
+                        norm_layer,
                         dtype=dtype,
-                        axis_name=axis_name,
                         inference=inference,
                         key=subkey,
                     )
@@ -587,7 +639,6 @@ class SwinTransformer(eqx.Module):
 
         num_features = embed_dim * 2 ** (len(depths) - 1)
         self.norm = norm_layer(num_features)
-        # self.permute = Permute([0, 3, 1, 2])  # B H W C -> B C H W
         self.avgpool = eqx.nn.AdaptiveAvgPool2d(1)
         key, subkey = jax.random.split(key)
         self.head = eqx.nn.Linear(num_features, num_classes, key=subkey, dtype=dtype)
@@ -606,441 +657,302 @@ class SwinTransformer(eqx.Module):
         return x, state
 
     def model_order(self) -> list[str]:
-        """
-        Returns a list of JAX PyTree paths (as strings) for parameters and state,
-        ordered to match the corresponding PyTorch state_dict keys.
-        This is used by statedict2pytree for correct weight loading.
-        """
-        if self.v == 2:
-            order = [
-                "[0].features.layers[0].layers[0].weight",
-                "[0].features.layers[0].layers[0].bias",
-                "[0].features.layers[0].layers[2].weight",
-                "[0].features.layers[0].layers[2].bias",
-                "[0].features.layers[1].layers[0].norm1.weight",
-                "[0].features.layers[1].layers[0].norm1.bias",
-                "[0].features.layers[1].layers[0].attn.logit_scale",
-                "[1][<flat index 1>]",
-                "[1][<flat index 0>]",
-                "[0].features.layers[1].layers[0].attn.qkv.weight",
-                "[0].features.layers[1].layers[0].attn.qkv.bias",
-                "[0].features.layers[1].layers[0].attn.proj.weight",
-                "[0].features.layers[1].layers[0].attn.proj.bias",
-                "[0].features.layers[1].layers[0].attn.cpb_mlp_ln1.weight",
-                "[0].features.layers[1].layers[0].attn.cpb_mlp_ln1.bias",
-                "[0].features.layers[1].layers[0].attn.cpb_mlp_ln2.weight",
-                "[0].features.layers[1].layers[0].norm2.weight",
-                "[0].features.layers[1].layers[0].norm2.bias",
-                "[0].features.layers[1].layers[0].mlp.layers[0].weight",
-                "[0].features.layers[1].layers[0].mlp.layers[0].bias",
-                "[0].features.layers[1].layers[0].mlp.layers[3].weight",
-                "[0].features.layers[1].layers[0].mlp.layers[3].bias",
-                "[0].features.layers[1].layers[1].norm1.weight",
-                "[0].features.layers[1].layers[1].norm1.bias",
-                "[0].features.layers[1].layers[1].attn.logit_scale",
-                "[1][<flat index 3>]",
-                "[1][<flat index 2>]",
-                "[0].features.layers[1].layers[1].attn.qkv.weight",
-                "[0].features.layers[1].layers[1].attn.qkv.bias",
-                "[0].features.layers[1].layers[1].attn.proj.weight",
-                "[0].features.layers[1].layers[1].attn.proj.bias",
-                "[0].features.layers[1].layers[1].attn.cpb_mlp_ln1.weight",
-                "[0].features.layers[1].layers[1].attn.cpb_mlp_ln1.bias",
-                "[0].features.layers[1].layers[1].attn.cpb_mlp_ln2.weight",
-                "[0].features.layers[1].layers[1].norm2.weight",
-                "[0].features.layers[1].layers[1].norm2.bias",
-                "[0].features.layers[1].layers[1].mlp.layers[0].weight",
-                "[0].features.layers[1].layers[1].mlp.layers[0].bias",
-                "[0].features.layers[1].layers[1].mlp.layers[3].weight",
-                "[0].features.layers[1].layers[1].mlp.layers[3].bias",
-                "[0].features.layers[2].reduction.weight",
-                "[0].features.layers[2].norm.weight",
-                "[0].features.layers[2].norm.bias",
-                "[0].features.layers[3].layers[0].norm1.weight",
-                "[0].features.layers[3].layers[0].norm1.bias",
-                "[0].features.layers[3].layers[0].attn.logit_scale",
-                "[1][<flat index 5>]",
-                "[1][<flat index 4>]",
-                "[0].features.layers[3].layers[0].attn.qkv.weight",
-                "[0].features.layers[3].layers[0].attn.qkv.bias",
-                "[0].features.layers[3].layers[0].attn.proj.weight",
-                "[0].features.layers[3].layers[0].attn.proj.bias",
-                "[0].features.layers[3].layers[0].attn.cpb_mlp_ln1.weight",
-                "[0].features.layers[3].layers[0].attn.cpb_mlp_ln1.bias",
-                "[0].features.layers[3].layers[0].attn.cpb_mlp_ln2.weight",
-                "[0].features.layers[3].layers[0].norm2.weight",
-                "[0].features.layers[3].layers[0].norm2.bias",
-                "[0].features.layers[3].layers[0].mlp.layers[0].weight",
-                "[0].features.layers[3].layers[0].mlp.layers[0].bias",
-                "[0].features.layers[3].layers[0].mlp.layers[3].weight",
-                "[0].features.layers[3].layers[0].mlp.layers[3].bias",
-                "[0].features.layers[3].layers[1].norm1.weight",
-                "[0].features.layers[3].layers[1].norm1.bias",
-                "[0].features.layers[3].layers[1].attn.logit_scale",
-                "[1][<flat index 7>]",
-                "[1][<flat index 6>]",
-                "[0].features.layers[3].layers[1].attn.qkv.weight",
-                "[0].features.layers[3].layers[1].attn.qkv.bias",
-                "[0].features.layers[3].layers[1].attn.proj.weight",
-                "[0].features.layers[3].layers[1].attn.proj.bias",
-                "[0].features.layers[3].layers[1].attn.cpb_mlp_ln1.weight",
-                "[0].features.layers[3].layers[1].attn.cpb_mlp_ln1.bias",
-                "[0].features.layers[3].layers[1].attn.cpb_mlp_ln2.weight",
-                "[0].features.layers[3].layers[1].norm2.weight",
-                "[0].features.layers[3].layers[1].norm2.bias",
-                "[0].features.layers[3].layers[1].mlp.layers[0].weight",
-                "[0].features.layers[3].layers[1].mlp.layers[0].bias",
-                "[0].features.layers[3].layers[1].mlp.layers[3].weight",
-                "[0].features.layers[3].layers[1].mlp.layers[3].bias",
-                "[0].features.layers[4].reduction.weight",
-                "[0].features.layers[4].norm.weight",
-                "[0].features.layers[4].norm.bias",
-                "[0].features.layers[5].layers[0].norm1.weight",
-                "[0].features.layers[5].layers[0].norm1.bias",
-                "[0].features.layers[5].layers[0].attn.logit_scale",
-                "[1][<flat index 9>]",
-                "[1][<flat index 8>]",
-                "[0].features.layers[5].layers[0].attn.qkv.weight",
-                "[0].features.layers[5].layers[0].attn.qkv.bias",
-                "[0].features.layers[5].layers[0].attn.proj.weight",
-                "[0].features.layers[5].layers[0].attn.proj.bias",
-                "[0].features.layers[5].layers[0].attn.cpb_mlp_ln1.weight",
-                "[0].features.layers[5].layers[0].attn.cpb_mlp_ln1.bias",
-                "[0].features.layers[5].layers[0].attn.cpb_mlp_ln2.weight",
-                "[0].features.layers[5].layers[0].norm2.weight",
-                "[0].features.layers[5].layers[0].norm2.bias",
-                "[0].features.layers[5].layers[0].mlp.layers[0].weight",
-                "[0].features.layers[5].layers[0].mlp.layers[0].bias",
-                "[0].features.layers[5].layers[0].mlp.layers[3].weight",
-                "[0].features.layers[5].layers[0].mlp.layers[3].bias",
-                "[0].features.layers[5].layers[1].norm1.weight",
-                "[0].features.layers[5].layers[1].norm1.bias",
-                "[0].features.layers[5].layers[1].attn.logit_scale",
-                "[1][<flat index 11>]",
-                "[1][<flat index 10>]",
-                "[0].features.layers[5].layers[1].attn.qkv.weight",
-                "[0].features.layers[5].layers[1].attn.qkv.bias",
-                "[0].features.layers[5].layers[1].attn.proj.weight",
-                "[0].features.layers[5].layers[1].attn.proj.bias",
-                "[0].features.layers[5].layers[1].attn.cpb_mlp_ln1.weight",
-                "[0].features.layers[5].layers[1].attn.cpb_mlp_ln1.bias",
-                "[0].features.layers[5].layers[1].attn.cpb_mlp_ln2.weight",
-                "[0].features.layers[5].layers[1].norm2.weight",
-                "[0].features.layers[5].layers[1].norm2.bias",
-                "[0].features.layers[5].layers[1].mlp.layers[0].weight",
-                "[0].features.layers[5].layers[1].mlp.layers[0].bias",
-                "[0].features.layers[5].layers[1].mlp.layers[3].weight",
-                "[0].features.layers[5].layers[1].mlp.layers[3].bias",
-                "[0].features.layers[5].layers[2].norm1.weight",
-                "[0].features.layers[5].layers[2].norm1.bias",
-                "[0].features.layers[5].layers[2].attn.logit_scale",
-                "[1][<flat index 13>]",
-                "[1][<flat index 12>]",
-                "[0].features.layers[5].layers[2].attn.qkv.weight",
-                "[0].features.layers[5].layers[2].attn.qkv.bias",
-                "[0].features.layers[5].layers[2].attn.proj.weight",
-                "[0].features.layers[5].layers[2].attn.proj.bias",
-                "[0].features.layers[5].layers[2].attn.cpb_mlp_ln1.weight",
-                "[0].features.layers[5].layers[2].attn.cpb_mlp_ln1.bias",
-                "[0].features.layers[5].layers[2].attn.cpb_mlp_ln2.weight",
-                "[0].features.layers[5].layers[2].norm2.weight",
-                "[0].features.layers[5].layers[2].norm2.bias",
-                "[0].features.layers[5].layers[2].mlp.layers[0].weight",
-                "[0].features.layers[5].layers[2].mlp.layers[0].bias",
-                "[0].features.layers[5].layers[2].mlp.layers[3].weight",
-                "[0].features.layers[5].layers[2].mlp.layers[3].bias",
-                "[0].features.layers[5].layers[3].norm1.weight",
-                "[0].features.layers[5].layers[3].norm1.bias",
-                "[0].features.layers[5].layers[3].attn.logit_scale",
-                "[1][<flat index 15>]",
-                "[1][<flat index 14>]",
-                "[0].features.layers[5].layers[3].attn.qkv.weight",
-                "[0].features.layers[5].layers[3].attn.qkv.bias",
-                "[0].features.layers[5].layers[3].attn.proj.weight",
-                "[0].features.layers[5].layers[3].attn.proj.bias",
-                "[0].features.layers[5].layers[3].attn.cpb_mlp_ln1.weight",
-                "[0].features.layers[5].layers[3].attn.cpb_mlp_ln1.bias",
-                "[0].features.layers[5].layers[3].attn.cpb_mlp_ln2.weight",
-                "[0].features.layers[5].layers[3].norm2.weight",
-                "[0].features.layers[5].layers[3].norm2.bias",
-                "[0].features.layers[5].layers[3].mlp.layers[0].weight",
-                "[0].features.layers[5].layers[3].mlp.layers[0].bias",
-                "[0].features.layers[5].layers[3].mlp.layers[3].weight",
-                "[0].features.layers[5].layers[3].mlp.layers[3].bias",
-                "[0].features.layers[5].layers[4].norm1.weight",
-                "[0].features.layers[5].layers[4].norm1.bias",
-                "[0].features.layers[5].layers[4].attn.logit_scale",
-                "[1][<flat index 17>]",
-                "[1][<flat index 16>]",
-                "[0].features.layers[5].layers[4].attn.qkv.weight",
-                "[0].features.layers[5].layers[4].attn.qkv.bias",
-                "[0].features.layers[5].layers[4].attn.proj.weight",
-                "[0].features.layers[5].layers[4].attn.proj.bias",
-                "[0].features.layers[5].layers[4].attn.cpb_mlp_ln1.weight",
-                "[0].features.layers[5].layers[4].attn.cpb_mlp_ln1.bias",
-                "[0].features.layers[5].layers[4].attn.cpb_mlp_ln2.weight",
-                "[0].features.layers[5].layers[4].norm2.weight",
-                "[0].features.layers[5].layers[4].norm2.bias",
-                "[0].features.layers[5].layers[4].mlp.layers[0].weight",
-                "[0].features.layers[5].layers[4].mlp.layers[0].bias",
-                "[0].features.layers[5].layers[4].mlp.layers[3].weight",
-                "[0].features.layers[5].layers[4].mlp.layers[3].bias",
-                "[0].features.layers[5].layers[5].norm1.weight",
-                "[0].features.layers[5].layers[5].norm1.bias",
-                "[0].features.layers[5].layers[5].attn.logit_scale",
-                "[1][<flat index 19>]",
-                "[1][<flat index 18>]",
-                "[0].features.layers[5].layers[5].attn.qkv.weight",
-                "[0].features.layers[5].layers[5].attn.qkv.bias",
-                "[0].features.layers[5].layers[5].attn.proj.weight",
-                "[0].features.layers[5].layers[5].attn.proj.bias",
-                "[0].features.layers[5].layers[5].attn.cpb_mlp_ln1.weight",
-                "[0].features.layers[5].layers[5].attn.cpb_mlp_ln1.bias",
-                "[0].features.layers[5].layers[5].attn.cpb_mlp_ln2.weight",
-                "[0].features.layers[5].layers[5].norm2.weight",
-                "[0].features.layers[5].layers[5].norm2.bias",
-                "[0].features.layers[5].layers[5].mlp.layers[0].weight",
-                "[0].features.layers[5].layers[5].mlp.layers[0].bias",
-                "[0].features.layers[5].layers[5].mlp.layers[3].weight",
-                "[0].features.layers[5].layers[5].mlp.layers[3].bias",
-                "[0].features.layers[6].reduction.weight",
-                "[0].features.layers[6].norm.weight",
-                "[0].features.layers[6].norm.bias",
-                "[0].features.layers[7].layers[0].norm1.weight",
-                "[0].features.layers[7].layers[0].norm1.bias",
-                "[0].features.layers[7].layers[0].attn.logit_scale",
-                "[1][<flat index 21>]",
-                "[1][<flat index 20>]",
-                "[0].features.layers[7].layers[0].attn.qkv.weight",
-                "[0].features.layers[7].layers[0].attn.qkv.bias",
-                "[0].features.layers[7].layers[0].attn.proj.weight",
-                "[0].features.layers[7].layers[0].attn.proj.bias",
-                "[0].features.layers[7].layers[0].attn.cpb_mlp_ln1.weight",
-                "[0].features.layers[7].layers[0].attn.cpb_mlp_ln1.bias",
-                "[0].features.layers[7].layers[0].attn.cpb_mlp_ln2.weight",
-                "[0].features.layers[7].layers[0].norm2.weight",
-                "[0].features.layers[7].layers[0].norm2.bias",
-                "[0].features.layers[7].layers[0].mlp.layers[0].weight",
-                "[0].features.layers[7].layers[0].mlp.layers[0].bias",
-                "[0].features.layers[7].layers[0].mlp.layers[3].weight",
-                "[0].features.layers[7].layers[0].mlp.layers[3].bias",
-                "[0].features.layers[7].layers[1].norm1.weight",
-                "[0].features.layers[7].layers[1].norm1.bias",
-                "[0].features.layers[7].layers[1].attn.logit_scale",
-                "[1][<flat index 23>]",
-                "[1][<flat index 22>]",
-                "[0].features.layers[7].layers[1].attn.qkv.weight",
-                "[0].features.layers[7].layers[1].attn.qkv.bias",
-                "[0].features.layers[7].layers[1].attn.proj.weight",
-                "[0].features.layers[7].layers[1].attn.proj.bias",
-                "[0].features.layers[7].layers[1].attn.cpb_mlp_ln1.weight",
-                "[0].features.layers[7].layers[1].attn.cpb_mlp_ln1.bias",
-                "[0].features.layers[7].layers[1].attn.cpb_mlp_ln2.weight",
-                "[0].features.layers[7].layers[1].norm2.weight",
-                "[0].features.layers[7].layers[1].norm2.bias",
-                "[0].features.layers[7].layers[1].mlp.layers[0].weight",
-                "[0].features.layers[7].layers[1].mlp.layers[0].bias",
-                "[0].features.layers[7].layers[1].mlp.layers[3].weight",
-                "[0].features.layers[7].layers[1].mlp.layers[3].bias",
-                "[0].norm.weight",
-                "[0].norm.bias",
-                "[0].head.weight",
-                "[0].head.bias",
-            ]
+        return get_swin_model_order(self.v)
+
+
+def _swin_transformer(
+    key: PRNGKeyArray,
+    inference: bool,
+    num_classes: int,
+    patch_size: list[int],
+    embed_dim: int,
+    depths: list[int],
+    num_heads: list[int],
+    window_size: list[int],
+    stochastic_depth_prob: float,
+    block: type[StatefulLayer],
+    downsample_layer: type[PatchMerging | PatchMergingV2 | eqx.Module],
+    attn_layer: type[ShiftedWindowAttention | ShiftedWindowAttentionV2 | eqx.Module],
+    norm_layer: Callable | None = None,
+    dtype: Any = None,
+) -> tuple[SwinTransformer, eqx.nn.State]:
+    if dtype is None:
+        dtype = default_floating_dtype()
+    assert dtype is not None
+
+    if norm_layer is None:
+        norm_layer = functools.partial(LayerNorm, eps=1e-5, dtype=dtype)
+
+    model, state = eqx.nn.make_with_state(SwinTransformer)(
+        patch_size=patch_size,
+        embed_dim=embed_dim,
+        depths=depths,
+        num_heads=num_heads,
+        window_size=window_size,
+        mlp_ratio=4.0,
+        dropout=0.0,
+        attention_dropout=0.0,
+        stochastic_depth_prob=stochastic_depth_prob,
+        num_classes=num_classes,
+        norm_layer=norm_layer,
+        block=block,
+        downsample_layer=downsample_layer,
+        attn_layer=attn_layer,
+        inference=inference,
+        key=key,
+        dtype=dtype,
+    )
+    return model, state
+
+
+# Swin V1 Variants
+def _swin_t(key, inference: bool, num_classes=1000, dtype: Any = None):
+    return _swin_transformer(
+        key=key,
+        inference=inference,
+        num_classes=num_classes,
+        dtype=dtype,
+        patch_size=[4, 4],
+        embed_dim=96,
+        depths=[2, 2, 6, 2],
+        num_heads=[3, 6, 12, 24],
+        window_size=[7, 7],
+        stochastic_depth_prob=0.2,
+        block=SwinTransformerBlock,
+        downsample_layer=PatchMerging,
+        attn_layer=ShiftedWindowAttention,
+    )
+
+
+def _swin_s(key, inference: bool, num_classes=1000, dtype: Any = None):
+    return _swin_transformer(
+        key=key,
+        inference=inference,
+        num_classes=num_classes,
+        dtype=dtype,
+        patch_size=[4, 4],
+        embed_dim=96,
+        depths=[2, 2, 18, 2],
+        num_heads=[3, 6, 12, 24],
+        window_size=[7, 7],
+        stochastic_depth_prob=0.3,
+        block=SwinTransformerBlock,
+        downsample_layer=PatchMerging,
+        attn_layer=ShiftedWindowAttention,
+    )
+
+
+def _swin_b(key, inference: bool, num_classes=1000, dtype: Any = None):
+    return _swin_transformer(
+        key=key,
+        inference=inference,
+        num_classes=num_classes,
+        dtype=dtype,
+        patch_size=[4, 4],
+        embed_dim=128,
+        depths=[2, 2, 18, 2],
+        num_heads=[4, 8, 16, 32],
+        window_size=[7, 7],
+        stochastic_depth_prob=0.5,
+        block=SwinTransformerBlock,
+        downsample_layer=PatchMerging,
+        attn_layer=ShiftedWindowAttention,
+    )
+
+
+# Swin V2 Variants (Updated to use PatchMergingV2)
+def _swin_v2_t(key, inference: bool, num_classes=1000, dtype: Any = None):
+    return _swin_transformer(
+        key=key,
+        inference=inference,
+        num_classes=num_classes,
+        dtype=dtype,
+        patch_size=[4, 4],
+        embed_dim=96,
+        depths=[2, 2, 6, 2],
+        num_heads=[3, 6, 12, 24],
+        window_size=[8, 8],
+        stochastic_depth_prob=0.2,
+        block=SwinTransformerBlockV2,
+        downsample_layer=PatchMergingV2,  # Use V2 downsampler
+        attn_layer=ShiftedWindowAttentionV2,
+    )
+
+
+def _swin_v2_s(key, inference: bool, num_classes=1000, dtype: Any = None):
+    return _swin_transformer(
+        key=key,
+        inference=inference,
+        num_classes=num_classes,
+        dtype=dtype,
+        patch_size=[4, 4],
+        embed_dim=96,
+        depths=[2, 2, 18, 2],
+        num_heads=[3, 6, 12, 24],
+        window_size=[8, 8],
+        stochastic_depth_prob=0.3,
+        block=SwinTransformerBlockV2,
+        downsample_layer=PatchMergingV2,  # Use V2 downsampler
+        attn_layer=ShiftedWindowAttentionV2,
+    )
+
+
+def _swin_v2_b(key, inference: bool, num_classes=1000, dtype: Any = None):
+    return _swin_transformer(
+        key=key,
+        inference=inference,
+        num_classes=num_classes,
+        dtype=dtype,
+        patch_size=[4, 4],
+        embed_dim=128,
+        depths=[2, 2, 18, 2],
+        num_heads=[4, 8, 16, 32],
+        window_size=[8, 8],
+        stochastic_depth_prob=0.5,
+        block=SwinTransformerBlockV2,
+        downsample_layer=PatchMergingV2,  # Use V2 downsampler
+        attn_layer=ShiftedWindowAttentionV2,
+    )
+
+
+# 3. Weight Loading Function (Unchanged)
+def _swin_with_weights(
+    model: PyTree,
+    weights: str,
+    cache: bool,
+    dtype: Any,
+) -> tuple[SwinTransformer, eqx.nn.State]:
+    dtype_str = dtype_to_str(dtype)
+
+    weights_url = _SWIN_MODELS.get(weights)
+    if weights_url is None:
+        raise ValueError(f"No weights found for {weights}")
+
+    jaxonmodels_dir = os.path.expanduser("~/.jaxonmodels/models")
+    os.makedirs(jaxonmodels_dir, exist_ok=True)
+
+    cache_filename = f"{weights}-{dtype_str}.eqx"
+    cache_filepath = str(Path(jaxonmodels_dir) / cache_filename)
+
+    if cache and os.path.exists(cache_filepath):
+        print(f"Loading cached JAX model from: {cache_filepath}")
+        return eqx.tree_deserialise_leaves(cache_filepath, model)  # pyright: ignore
+
+    weights_dir = os.path.expanduser("~/.jaxonmodels/pytorch_weights")
+    os.makedirs(weights_dir, exist_ok=True)
+    filename = weights_url.split("/")[-1]
+    weights_file = os.path.join(weights_dir, filename)
+    if not os.path.exists(weights_file):
+        print(f"Downloading weights from {weights_url} to {weights_file}")
+        urlretrieve(weights_url, weights_file)
+    else:
+        print(f"Using existing PyTorch weights file: {weights_file}")
+
+    print("Loading PyTorch state dict...")
+    import torch
+
+    weights_dict = torch.load(weights_file, map_location=torch.device("cpu"))
+    if isinstance(weights_dict, dict) and "model" in weights_dict:
+        weights_dict = weights_dict["model"]
+    elif not isinstance(weights_dict, dict):
+        raise TypeError(f"Expected state_dict but got {type(weights_dict)}")
+
+    print("Converting PyTorch weights to JAX format...")
+
+    torchfields = state_dict_to_fields(weights_dict)
+    jaxfields, state_indices = pytree_to_fields(model)
+
+    model = convert(
+        weights_dict,
+        model,
+        jaxfields,
+        state_indices,
+        torchfields,
+        dtype=dtype,
+    )
+
+    if cache:
+        print(f"Caching JAX model to: {cache_filepath}")
+        serialize_pytree(model, cache_filepath)
+
+    return model
+
+
+# 4. Assertion Function (Unchanged)
+def _assert_model_and_weights_fit_swin(model_name: str, weights_name: str):
+    if "_" in weights_name:
+        weights_prefix = "_".join(weights_name.split("_")[:2])
+        if weights_prefix.startswith("swin_v2"):
+            weights_model = "_".join(weights_name.split("_")[:3])
         else:
-            order = [
-                "[0].features.layers[0].layers[0].weight",
-                "[0].features.layers[0].layers[0].bias",
-                "[0].features.layers[0].layers[2].weight",
-                "[0].features.layers[0].layers[2].bias",
-                "[0].features.layers[1].layers[0].norm1.weight",
-                "[0].features.layers[1].layers[0].norm1.bias",
-                "[0].features.layers[1].layers[0].attn.relative_position_bias_table",
-                "[1][<flat index 0>]",
-                "[0].features.layers[1].layers[0].attn.qkv.weight",
-                "[0].features.layers[1].layers[0].attn.qkv.bias",
-                "[0].features.layers[1].layers[0].attn.proj.weight",
-                "[0].features.layers[1].layers[0].attn.proj.bias",
-                "[0].features.layers[1].layers[0].norm2.weight",
-                "[0].features.layers[1].layers[0].norm2.bias",
-                "[0].features.layers[1].layers[0].mlp.layers[0].weight",
-                "[0].features.layers[1].layers[0].mlp.layers[0].bias",
-                "[0].features.layers[1].layers[0].mlp.layers[3].weight",
-                "[0].features.layers[1].layers[0].mlp.layers[3].bias",
-                # Stage 1, Block 1 (features.1.1 -> layers[1].layers[1])
-                "[0].features.layers[1].layers[1].norm1.weight",
-                "[0].features.layers[1].layers[1].norm1.bias",
-                "[0].features.layers[1].layers[1].attn.relative_position_bias_table",
-                "[1][<flat index 1>]",
-                "[0].features.layers[1].layers[1].attn.qkv.weight",
-                "[0].features.layers[1].layers[1].attn.qkv.bias",
-                "[0].features.layers[1].layers[1].attn.proj.weight",
-                "[0].features.layers[1].layers[1].attn.proj.bias",
-                "[0].features.layers[1].layers[1].norm2.weight",
-                "[0].features.layers[1].layers[1].norm2.bias",
-                "[0].features.layers[1].layers[1].mlp.layers[0].weight",
-                "[0].features.layers[1].layers[1].mlp.layers[0].bias",
-                "[0].features.layers[1].layers[1].mlp.layers[3].weight",
-                "[0].features.layers[1].layers[1].mlp.layers[3].bias",
-                "[0].features.layers[2].reduction.weight",
-                "[0].features.layers[2].norm.weight",
-                "[0].features.layers[2].norm.bias",
-                "[0].features.layers[3].layers[0].norm1.weight",
-                "[0].features.layers[3].layers[0].norm1.bias",
-                "[0].features.layers[3].layers[0].attn.relative_position_bias_table",
-                "[1][<flat index 2>]",
-                "[0].features.layers[3].layers[0].attn.qkv.weight",
-                "[0].features.layers[3].layers[0].attn.qkv.bias",
-                "[0].features.layers[3].layers[0].attn.proj.weight",
-                "[0].features.layers[3].layers[0].attn.proj.bias",
-                "[0].features.layers[3].layers[0].norm2.weight",
-                "[0].features.layers[3].layers[0].norm2.bias",
-                "[0].features.layers[3].layers[0].mlp.layers[0].weight",
-                "[0].features.layers[3].layers[0].mlp.layers[0].bias",
-                "[0].features.layers[3].layers[0].mlp.layers[3].weight",
-                "[0].features.layers[3].layers[0].mlp.layers[3].bias",
-                "[0].features.layers[3].layers[1].norm1.weight",
-                "[0].features.layers[3].layers[1].norm1.bias",
-                "[0].features.layers[3].layers[1].attn.relative_position_bias_table",
-                "[1][<flat index 3>]",
-                "[0].features.layers[3].layers[1].attn.qkv.weight",
-                "[0].features.layers[3].layers[1].attn.qkv.bias",
-                "[0].features.layers[3].layers[1].attn.proj.weight",
-                "[0].features.layers[3].layers[1].attn.proj.bias",
-                "[0].features.layers[3].layers[1].norm2.weight",
-                "[0].features.layers[3].layers[1].norm2.bias",
-                "[0].features.layers[3].layers[1].mlp.layers[0].weight",
-                "[0].features.layers[3].layers[1].mlp.layers[0].bias",
-                "[0].features.layers[3].layers[1].mlp.layers[3].weight",
-                "[0].features.layers[3].layers[1].mlp.layers[3].bias",
-                "[0].features.layers[4].reduction.weight",
-                "[0].features.layers[4].norm.weight",
-                "[0].features.layers[4].norm.bias",
-                "[0].features.layers[5].layers[0].norm1.weight",
-                "[0].features.layers[5].layers[0].norm1.bias",
-                "[0].features.layers[5].layers[0].attn.relative_position_bias_table",
-                "[1][<flat index 4>]",
-                "[0].features.layers[5].layers[0].attn.qkv.weight",
-                "[0].features.layers[5].layers[0].attn.qkv.bias",
-                "[0].features.layers[5].layers[0].attn.proj.weight",
-                "[0].features.layers[5].layers[0].attn.proj.bias",
-                "[0].features.layers[5].layers[0].norm2.weight",
-                "[0].features.layers[5].layers[0].norm2.bias",
-                "[0].features.layers[5].layers[0].mlp.layers[0].weight",
-                "[0].features.layers[5].layers[0].mlp.layers[0].bias",
-                "[0].features.layers[5].layers[0].mlp.layers[3].weight",
-                "[0].features.layers[5].layers[0].mlp.layers[3].bias",
-                # Stage 3, Block 1 (features.5.1 -> layers[5].layers[1])
-                "[0].features.layers[5].layers[1].norm1.weight",
-                "[0].features.layers[5].layers[1].norm1.bias",
-                "[0].features.layers[5].layers[1].attn.relative_position_bias_table",
-                "[1][<flat index 5>]",
-                "[0].features.layers[5].layers[1].attn.qkv.weight",
-                "[0].features.layers[5].layers[1].attn.qkv.bias",
-                "[0].features.layers[5].layers[1].attn.proj.weight",
-                "[0].features.layers[5].layers[1].attn.proj.bias",
-                "[0].features.layers[5].layers[1].norm2.weight",
-                "[0].features.layers[5].layers[1].norm2.bias",
-                "[0].features.layers[5].layers[1].mlp.layers[0].weight",
-                "[0].features.layers[5].layers[1].mlp.layers[0].bias",
-                "[0].features.layers[5].layers[1].mlp.layers[3].weight",
-                "[0].features.layers[5].layers[1].mlp.layers[3].bias",
-                # Stage 3, Block 2 (features.5.2 -> layers[5].layers[2])
-                "[0].features.layers[5].layers[2].norm1.weight",
-                "[0].features.layers[5].layers[2].norm1.bias",
-                "[0].features.layers[5].layers[2].attn.relative_position_bias_table",
-                "[1][<flat index 6>]",
-                "[0].features.layers[5].layers[2].attn.qkv.weight",
-                "[0].features.layers[5].layers[2].attn.qkv.bias",
-                "[0].features.layers[5].layers[2].attn.proj.weight",
-                "[0].features.layers[5].layers[2].attn.proj.bias",
-                "[0].features.layers[5].layers[2].norm2.weight",
-                "[0].features.layers[5].layers[2].norm2.bias",
-                "[0].features.layers[5].layers[2].mlp.layers[0].weight",
-                "[0].features.layers[5].layers[2].mlp.layers[0].bias",
-                "[0].features.layers[5].layers[2].mlp.layers[3].weight",
-                "[0].features.layers[5].layers[2].mlp.layers[3].bias",
-                # Stage 3, Block 3 (features.5.3 -> layers[5].layers[3])
-                "[0].features.layers[5].layers[3].norm1.weight",
-                "[0].features.layers[5].layers[3].norm1.bias",
-                "[0].features.layers[5].layers[3].attn.relative_position_bias_table",
-                "[1][<flat index 7>]",
-                "[0].features.layers[5].layers[3].attn.qkv.weight",
-                "[0].features.layers[5].layers[3].attn.qkv.bias",
-                "[0].features.layers[5].layers[3].attn.proj.weight",
-                "[0].features.layers[5].layers[3].attn.proj.bias",
-                "[0].features.layers[5].layers[3].norm2.weight",
-                "[0].features.layers[5].layers[3].norm2.bias",
-                "[0].features.layers[5].layers[3].mlp.layers[0].weight",
-                "[0].features.layers[5].layers[3].mlp.layers[0].bias",
-                "[0].features.layers[5].layers[3].mlp.layers[3].weight",
-                "[0].features.layers[5].layers[3].mlp.layers[3].bias",
-                # Stage 3, Block 4 (features.5.4 -> layers[5].layers[4])
-                "[0].features.layers[5].layers[4].norm1.weight",
-                "[0].features.layers[5].layers[4].norm1.bias",
-                "[0].features.layers[5].layers[4].attn.relative_position_bias_table",
-                "[1][<flat index 8>]",
-                "[0].features.layers[5].layers[4].attn.qkv.weight",
-                "[0].features.layers[5].layers[4].attn.qkv.bias",
-                "[0].features.layers[5].layers[4].attn.proj.weight",
-                "[0].features.layers[5].layers[4].attn.proj.bias",
-                "[0].features.layers[5].layers[4].norm2.weight",
-                "[0].features.layers[5].layers[4].norm2.bias",
-                "[0].features.layers[5].layers[4].mlp.layers[0].weight",
-                "[0].features.layers[5].layers[4].mlp.layers[0].bias",
-                "[0].features.layers[5].layers[4].mlp.layers[3].weight",
-                "[0].features.layers[5].layers[4].mlp.layers[3].bias",
-                # Stage 3, Block 5 (features.5.5 -> layers[5].layers[5])
-                "[0].features.layers[5].layers[5].norm1.weight",
-                "[0].features.layers[5].layers[5].norm1.bias",
-                "[0].features.layers[5].layers[5].attn.relative_position_bias_table",
-                "[1][<flat index 9>]",
-                "[0].features.layers[5].layers[5].attn.qkv.weight",
-                "[0].features.layers[5].layers[5].attn.qkv.bias",
-                "[0].features.layers[5].layers[5].attn.proj.weight",
-                "[0].features.layers[5].layers[5].attn.proj.bias",
-                "[0].features.layers[5].layers[5].norm2.weight",
-                "[0].features.layers[5].layers[5].norm2.bias",
-                "[0].features.layers[5].layers[5].mlp.layers[0].weight",
-                "[0].features.layers[5].layers[5].mlp.layers[0].bias",
-                "[0].features.layers[5].layers[5].mlp.layers[3].weight",
-                "[0].features.layers[5].layers[5].mlp.layers[3].bias",
-                # Downsample 3 (features.6 -> layers[6])
-                "[0].features.layers[6].reduction.weight",
-                "[0].features.layers[6].norm.weight",
-                "[0].features.layers[6].norm.bias",
-                # Stage 4, Block 0 (features.7.0 -> layers[7].layers[0])
-                "[0].features.layers[7].layers[0].norm1.weight",
-                "[0].features.layers[7].layers[0].norm1.bias",
-                "[0].features.layers[7].layers[0].attn.relative_position_bias_table",
-                "[1][<flat index 10>]",
-                "[0].features.layers[7].layers[0].attn.qkv.weight",
-                "[0].features.layers[7].layers[0].attn.qkv.bias",
-                "[0].features.layers[7].layers[0].attn.proj.weight",
-                "[0].features.layers[7].layers[0].attn.proj.bias",
-                "[0].features.layers[7].layers[0].norm2.weight",
-                "[0].features.layers[7].layers[0].norm2.bias",
-                "[0].features.layers[7].layers[0].mlp.layers[0].weight",
-                "[0].features.layers[7].layers[0].mlp.layers[0].bias",
-                "[0].features.layers[7].layers[0].mlp.layers[3].weight",
-                "[0].features.layers[7].layers[0].mlp.layers[3].bias",
-                "[0].features.layers[7].layers[1].norm1.weight",
-                "[0].features.layers[7].layers[1].norm1.bias",
-                "[0].features.layers[7].layers[1].attn.relative_position_bias_table",
-                "[1][<flat index 11>]",
-                "[0].features.layers[7].layers[1].attn.qkv.weight",
-                "[0].features.layers[7].layers[1].attn.qkv.bias",
-                "[0].features.layers[7].layers[1].attn.proj.weight",
-                "[0].features.layers[7].layers[1].attn.proj.bias",
-                "[0].features.layers[7].layers[1].norm2.weight",
-                "[0].features.layers[7].layers[1].norm2.bias",
-                "[0].features.layers[7].layers[1].mlp.layers[0].weight",
-                "[0].features.layers[7].layers[1].mlp.layers[0].bias",
-                "[0].features.layers[7].layers[1].mlp.layers[3].weight",
-                "[0].features.layers[7].layers[1].mlp.layers[3].bias",
-                "[0].norm.weight",
-                "[0].norm.bias",
-                "[0].head.weight",
-                "[0].head.bias",
-            ]
-        return order
+            weights_model = weights_prefix
+
+        if weights_model != model_name:
+            raise ValueError(
+                f"Model {model_name} is incompatible with weights {weights_name}. "
+                f"Weight prefix '{weights_model}' does not match model name."
+            )
+
+
+# 5. Main Loading Function (Unchanged)
+def load_swin_transformer(
+    model_name: Literal[
+        "swin_t",
+        "swin_s",
+        "swin_b",  # V1
+        "swin_v2_t",
+        "swin_v2_s",
+        "swin_v2_b",  # V2
+    ],
+    weights: Literal[
+        "swin_t_IMAGENET1K_V1",
+        "swin_s_IMAGENET1K_V1",
+        "swin_b_IMAGENET1K_V1",
+        "swin_v2_t_IMAGENET1K_V1",
+        "swin_v2_s_IMAGENET1K_V1",
+        "swin_v2_b_IMAGENET1K_V1",
+    ]
+    | None = None,
+    num_classes: int = 1000,
+    cache: bool = True,
+    inference: bool = True,
+    key: PRNGKeyArray | None = None,
+    dtype: Any = None,
+) -> tuple[SwinTransformer, eqx.nn.State]:
+    if key is None:
+        key = jax.random.key(42)
+
+    if dtype is None:
+        dtype = default_floating_dtype()
+    assert dtype is not None
+
+    model = None
+
+    match model_name:
+        case "swin_t":
+            model = _swin_t(key, inference, num_classes, dtype=dtype)
+        case "swin_s":
+            model = _swin_s(key, inference, num_classes, dtype=dtype)
+        case "swin_b":
+            model = _swin_b(key, inference, num_classes, dtype=dtype)
+        case "swin_v2_t":
+            model = _swin_v2_t(
+                key, inference, num_classes, dtype=dtype
+            )  # Now uses PatchMergingV2 internally
+        case "swin_v2_s":
+            model = _swin_v2_s(
+                key, inference, num_classes, dtype=dtype
+            )  # Now uses PatchMergingV2 internally
+        case "swin_v2_b":
+            model = _swin_v2_b(
+                key, inference, num_classes, dtype=dtype
+            )  # Now uses PatchMergingV2 internally
+        case _:
+            raise ValueError(f"Unknown Swin Transformer model name: {model_name}")
+
+    if weights:
+        _assert_model_and_weights_fit_swin(model_name, weights)
+        model = _swin_with_weights(model, weights, cache, dtype=dtype)
+
+    assert model is not None
+    return model

@@ -242,7 +242,7 @@ class LayerNorm(eqx.Module):
         if x.shape[-len(self.normalized_shape) :] != self.normalized_shape:
             raise ValueError(
                 f"Input shape {x.shape} must end "
-                "with normalized_shape {self.normalized_shape}"
+                f"with normalized_shape {self.normalized_shape}"
             )
 
         orig_dtype = x.dtype

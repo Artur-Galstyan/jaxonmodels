@@ -1,0 +1,55 @@
+{
+    "image": "cat.jpg",
+    "models": [
+        {
+            "model": "JAX swin_t",
+            "predictions": [
+                {
+                    "category": "Egyptian cat",
+                    "probability": 0.43815141916275024
+                },
+                {
+                    "category": "tabby",
+                    "probability": 0.3903076946735382
+                },
+                {
+                    "category": "tiger cat",
+                    "probability": 0.08206275850534439
+                },
+                {
+                    "category": "lynx",
+                    "probability": 0.005634394474327564
+                },
+                {
+                    "category": "Persian cat",
+                    "probability": 0.0005819491925649345
+                }
+            ]
+        },
+        {
+            "model": "JAX swin_v2_t",
+            "predictions": [
+                {
+                    "category": "tabby",
+                    "probability": 0.4893040359020233
+                },
+                {
+                    "category": "Egyptian cat",
+                    "probability": 0.25337523221969604
+                },
+                {
+                    "category": "tiger cat",
+                    "probability": 0.09229879081249237
+                },
+                {
+                    "category": "lynx",
+                    "probability": 0.005133540369570255
+                },
+                {
+                    "category": "Persian cat",
+                    "probability": 0.0010049933334812522
+                }
+            ]
+        }
+    ]
+}
