@@ -159,10 +159,24 @@ def pytree_to_fields(pytree: PyTree) -> tuple[list[JaxField], dict | None]:
     paths = jax.tree.leaves_with_path(pytree)
     i = {}
     for p in paths:
-        keys, arr = p
+        keys, _ = p
         n, i = get_node(pytree, keys, i)
         if n is not None and eqx.is_array(n):
             jaxfields.append(JaxField(path=keys, shape=n.shape))
+    model_part = pytree[0] if isinstance(pytree, tuple) and len(pytree) > 0 else pytree
+
+    # Check the model_part for the method
+    if hasattr(model_part, "model_order") and callable(model_part.model_order):  # pyright: ignore
+        ordered_jaxfields = []
+        model_order_paths: list[str] = model_part.model_order()  # pyright: ignore
+        path_dict = {jax.tree_util.keystr(field.path): field for field in jaxfields}
+
+        for path_str in model_order_paths:
+            if path_str in path_dict:
+                ordered_jaxfields.append(path_dict[path_str])
+                del path_dict[path_str]
+        ordered_jaxfields.extend(path_dict.values())
+        jaxfields = ordered_jaxfields
     return jaxfields, i
 
 

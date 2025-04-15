@@ -3,6 +3,7 @@ from itertools import repeat
 import jax
 import jax.numpy as jnp
 from beartype.typing import Any
+from jaxtyping import Array, Float
 
 
 def make_divisible(v: float, divisor: int, min_value: int | None = None) -> int:
@@ -48,3 +49,16 @@ def dtype_to_str(dtype) -> str:
         dtype_str = dtype_str.split("'")[1].split(".")[-1]
 
     return dtype_str
+
+
+def patch_merging_pad(x: Float[Array, "H W C"]) -> Array:
+    H, W, C = x.shape
+    h_pad = H % 2
+    w_pad = W % 2
+    x = jnp.pad(x, ((0, h_pad), (0, w_pad), (0, 0)))
+    x0 = x[0::2, 0::2, :]
+    x1 = x[1::2, 0::2, :]
+    x2 = x[0::2, 1::2, :]
+    x3 = x[1::2, 1::2, :]
+    x = jnp.concatenate([x0, x1, x2, x3], axis=-1)
+    return x

@@ -11,7 +11,7 @@ from equinox.nn import StatefulLayer
 from jaxtyping import Array, Float, PRNGKeyArray
 
 from jaxonmodels.functions import default_floating_dtype, dtype_to_str
-from jaxonmodels.layers import ConvNormActivation, StochasticDepth
+from jaxonmodels.layers import ConvNormActivation, LayerNorm2d, StochasticDepth
 from jaxonmodels.statedict2pytree.s2p import (
     convert,
     move_running_fields_to_the_end,
@@ -26,37 +26,6 @@ _MODELS = {
     "convnext_base_IMAGENET1K_V1": "https://download.pytorch.org/models/convnext_base-6075fbad.pth",
     "convnext_large_IMAGENET1K_V1": "https://download.pytorch.org/models/convnext_large-ea097f82.pth",
 }
-
-
-class LayerNorm2d(eqx.Module):
-    layer_norm: eqx.nn.LayerNorm
-
-    def __init__(
-        self,
-        shape: int | Sequence[int],
-        eps: float = 0.00001,
-        use_weight: bool = True,
-        use_bias: bool = True,
-        dtype: Any | None = None,
-        *,
-        elementwise_affine: bool | None = None,
-    ):
-        self.layer_norm = eqx.nn.LayerNorm(
-            shape,
-            eps,
-            use_weight,
-            use_bias,
-            dtype=dtype,
-            elementwise_affine=elementwise_affine,
-        )
-
-    def __call__(
-        self, x: Float[Array, "c h w"], *, key: PRNGKeyArray | None = None
-    ) -> Float[Array, "c h w"]:
-        x = jnp.transpose(x, (1, 2, 0))
-        x = eqx.filter_vmap(eqx.filter_vmap(self.layer_norm))(x)
-        x = jnp.transpose(x, (2, 0, 1))
-        return x
 
 
 class CNBlockConfig:
@@ -142,8 +111,8 @@ class CNBlock(eqx.Module):
     ) -> Float[Array, "c h w"]:
         residual = x
         x = self.dwconv(x)
-        x = self.norm(x)  # pyright: ignore
         x = jnp.transpose(x, (1, 2, 0))
+        x = self.norm(x)  # pyright: ignore
         x = eqx.filter_vmap(eqx.filter_vmap(self.pwconv1))(x)
         x = jax.nn.gelu(x)
         x = eqx.filter_vmap(eqx.filter_vmap(self.pwconv2))(x)
