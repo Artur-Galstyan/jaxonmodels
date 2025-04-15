@@ -18,7 +18,7 @@ These models have been implemented:
 - [x] ViT
 - [x] Mamba
 - [x] ConvNext
-- [ ] Swin Transformer (in progress)
+- [x] Swin Transformer
 
 
 ## Contributing
