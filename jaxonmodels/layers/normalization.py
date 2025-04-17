@@ -7,8 +7,10 @@ from jaxtyping import Array, Float, PRNGKeyArray
 
 from jaxonmodels.functions.utils import default_floating_dtype
 
+from .abstract import AbstractNorm, AbstractNormStateful
 
-class BatchNorm(eqx.nn.StatefulLayer):
+
+class BatchNorm(AbstractNormStateful):
     state_index: eqx.nn.StateIndex
 
     gamma: Float[Array, "size"] | None
@@ -164,37 +166,8 @@ class LocalResponseNormalization(eqx.Module):
         return ys
 
 
-class LayerNorm2d(eqx.Module):
-    layer_norm: eqx.nn.LayerNorm
-
-    def __init__(
-        self,
-        shape: int | Sequence[int],
-        eps: float = 0.00001,
-        use_weight: bool = True,
-        use_bias: bool = True,
-        dtype: Any | None = None,
-        *,
-        elementwise_affine: bool | None = None,
-    ):
-        self.layer_norm = eqx.nn.LayerNorm(
-            shape,
-            eps,
-            use_weight,
-            use_bias,
-            dtype=dtype,
-            elementwise_affine=elementwise_affine,
-        )
-
-    def __call__(
-        self, x: Float[Array, "h w c"], *, key: PRNGKeyArray | None = None
-    ) -> Float[Array, "h w c"]:
-        x = eqx.filter_vmap(eqx.filter_vmap(self.layer_norm))(x)
-        return x
-
-
-class LayerNorm(eqx.Module):
-    normalized_shape: tuple[int, ...] = eqx.field(static=True)
+class LayerNorm(AbstractNorm):
+    shape: tuple[int, ...] = eqx.field(static=True)
     axes: tuple[int, ...] = eqx.field(static=True)
     eps: float = eqx.field(static=True)
     use_weight: bool = eqx.field(static=True)
@@ -204,18 +177,18 @@ class LayerNorm(eqx.Module):
 
     def __init__(
         self,
-        normalized_shape: int | Sequence[int],
+        shape: int | Sequence[int],
         eps: float = 1e-5,
         use_weight: bool = True,
         use_bias: bool = True,
         dtype=None,
     ):
-        if isinstance(normalized_shape, int):
-            shape_tuple = (normalized_shape,)
+        if isinstance(shape, int):
+            shape_tuple = (shape,)
         else:
-            shape_tuple = tuple(normalized_shape)
-        self.normalized_shape = shape_tuple
-        self.axes = tuple(range(-len(self.normalized_shape), 0))
+            shape_tuple = tuple(shape)
+        self.shape = shape_tuple
+        self.axes = tuple(range(-len(self.shape), 0))
         self.eps = eps
         self.use_weight = use_weight
         self.use_bias = use_bias
@@ -225,11 +198,11 @@ class LayerNorm(eqx.Module):
         assert dtype is not None
 
         if self.use_weight:
-            self.weight = jnp.ones(self.normalized_shape, dtype=dtype)
+            self.weight = jnp.ones(self.shape, dtype=dtype)
         else:
             self.weight = None
         if self.use_bias:
-            self.bias = jnp.zeros(self.normalized_shape, dtype=dtype)
+            self.bias = jnp.zeros(self.shape, dtype=dtype)
         else:
             self.bias = None
 
@@ -239,11 +212,8 @@ class LayerNorm(eqx.Module):
         *,
         key: PRNGKeyArray | None = None,
     ) -> Array:
-        if x.shape[-len(self.normalized_shape) :] != self.normalized_shape:
-            raise ValueError(
-                f"Input shape {x.shape} must end "
-                f"with normalized_shape {self.normalized_shape}"
-            )
+        if x.shape[-len(self.shape) :] != self.shape:
+            raise ValueError(f"Input shape {x.shape} must end with shape {self.shape}")
 
         orig_dtype = x.dtype
         with jax.numpy_dtype_promotion("standard"):

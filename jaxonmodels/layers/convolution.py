@@ -6,10 +6,12 @@ from jaxtyping import Array, Float, PRNGKeyArray
 
 from jaxonmodels.functions import make_ntuple
 
+from .abstract import AbstractNorm, AbstractNormStateful
+
 
 class ConvNormActivation(StatefulLayer):
     conv: eqx.nn.Conv
-    norm: eqx.Module | None
+    norm: AbstractNorm | AbstractNormStateful | None
     activation: eqx.nn.Lambda | None
 
     def __init__(
@@ -25,7 +27,7 @@ class ConvNormActivation(StatefulLayer):
         dilation: int | Sequence[int] = 1,
         use_bias: bool | None = None,
         *,
-        norm_layer: Callable[..., eqx.Module] | None,
+        norm_layer: Callable[..., AbstractNorm | AbstractNormStateful] | None,
         key: PRNGKeyArray,
         dtype: Any,
     ):

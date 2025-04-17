@@ -5,8 +5,8 @@ from urllib.request import urlretrieve
 import equinox as eqx
 import jax
 import jax.numpy as jnp
-import jaxtyping as jt
 from beartype.typing import Any
+from jaxtyping import Array, Float, PRNGKeyArray
 
 from jaxonmodels.functions import default_floating_dtype, dtype_to_str
 from jaxonmodels.layers import LocalResponseNormalization
@@ -44,7 +44,7 @@ class AlexNet(eqx.Module):
         self,
         *,
         n_classes: int,
-        key: jt.PRNGKeyArray,
+        key: PRNGKeyArray,
         inference: bool = False,
         dtype: Any | None = None,
     ):
@@ -118,9 +118,9 @@ class AlexNet(eqx.Module):
 
     def __call__(
         self,
-        x: jt.Float[jt.Array, "c h w"],
-        key: jt.PRNGKeyArray | None = None,
-    ) -> jt.Array:
+        x: Float[Array, "c h w"],
+        key: PRNGKeyArray | None = None,
+    ) -> Array:
         if self.inference:
             key, subkey = None, None
         else:
