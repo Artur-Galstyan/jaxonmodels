@@ -11,7 +11,8 @@ from equinox.nn import StatefulLayer
 from jaxtyping import Array, Float, PRNGKeyArray
 
 from jaxonmodels.functions import default_floating_dtype, dtype_to_str
-from jaxonmodels.layers import ConvNormActivation, LayerNorm2d, StochasticDepth
+from jaxonmodels.layers import ConvNormActivation, LayerNorm, StochasticDepth
+from jaxonmodels.layers.abstract import AbstractNorm
 from jaxonmodels.statedict2pytree.s2p import (
     convert,
     move_running_fields_to_the_end,
@@ -52,7 +53,7 @@ class CNBlockConfig:
 class CNBlock(eqx.Module):
     layer_scale: Array
     dwconv: eqx.nn.Conv2d
-    norm: eqx.Module
+    norm: AbstractNorm
     pwconv1: eqx.nn.Linear
     pwconv2: eqx.nn.Linear
     stochastic_depth: StochasticDepth
@@ -62,7 +63,7 @@ class CNBlock(eqx.Module):
         dim: int,
         layer_scale: float,
         stochastic_depth_prob: float,
-        norm_layer,
+        norm_layer: Callable[..., AbstractNorm] | None,
         *,
         key: PRNGKeyArray,
         dtype: Any,
@@ -81,7 +82,7 @@ class CNBlock(eqx.Module):
             dtype=dtype,
         )
         if norm_layer is None:
-            self.norm = LayerNorm2d(shape=dim, eps=1e-6)
+            self.norm = LayerNorm(shape=dim, eps=1e-6)
         else:
             self.norm = norm_layer(shape=dim, eps=1e-6)
 
@@ -137,7 +138,7 @@ class ConvNeXt(StatefulLayer):
         layer_scale: float,
         num_classes: int,
         block: Callable[..., eqx.Module] | None,
-        norm_layer: Callable[..., eqx.Module] | None,
+        norm_layer: Callable[..., AbstractNorm] | None,
         inference: bool,
         key: PRNGKeyArray,
         dtype: Any,
@@ -162,7 +163,7 @@ class ConvNeXt(StatefulLayer):
         firstconv_output_channels = block_setting[0].input_channels
 
         if norm_layer is None:
-            norm_layer = functools.partial(LayerNorm2d, dtype=dtype)
+            norm_layer = functools.partial(LayerNorm, dtype=dtype)
         assert norm_layer is not None
         layers: list[eqx.Module] = []
 

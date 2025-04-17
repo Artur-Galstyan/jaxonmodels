@@ -13,6 +13,7 @@ from jaxtyping import Array, Float, PRNGKeyArray, PyTree
 from jaxonmodels.functions import patch_merging_pad, shifted_window_attention
 from jaxonmodels.functions.utils import default_floating_dtype, dtype_to_str
 from jaxonmodels.layers import LayerNorm, StochasticDepth
+from jaxonmodels.layers.abstract import AbstractNorm, AbstractNormStateful
 from jaxonmodels.statedict2pytree.model_orders import get_swin_model_order
 from jaxonmodels.statedict2pytree.s2p import (
     convert,
@@ -44,14 +45,14 @@ def get_relative_position_bias(
 
 
 class MLPWithDropout(eqx.nn.StatefulLayer):
-    layers: list[eqx.Module]
+    layers: list[PyTree]
 
     def __init__(
         self,
         in_channels: int,
         hidden_channels: list[int],
         key: PRNGKeyArray,
-        norm_layer: Callable | None,
+        norm_layer: Callable[..., AbstractNorm] | None,
         activation: Callable | None,
         use_bias: bool,
         dropout: float,
@@ -96,21 +97,21 @@ class MLPWithDropout(eqx.nn.StatefulLayer):
             if isinstance(layer, eqx.nn.StatefulLayer):
                 x, state = layer(x, state)
             else:
-                x = eqx.filter_vmap(eqx.filter_vmap(layer))(x)  # pyright: ignore
+                x = eqx.filter_vmap(eqx.filter_vmap(layer))(x)
 
         return x, state
 
 
 class PatchMerging(StatefulLayer):
     reduction: eqx.nn.Linear
-    norm: eqx.Module
+    norm: AbstractNorm | AbstractNormStateful
 
     inference: bool
 
     def __init__(
         self,
         dim: int,
-        norm_layer: Callable[..., eqx.Module],
+        norm_layer: Callable[..., AbstractNorm | AbstractNormStateful],
         inference: bool,
         key: PRNGKeyArray,
         dtype: Any,
@@ -130,23 +131,23 @@ class PatchMerging(StatefulLayer):
     ) -> tuple[Float[Array, "H_half W_half C*2"], eqx.nn.State]:
         x = patch_merging_pad(x)
         if isinstance(self.norm, StatefulLayer):
-            x, state = self.norm(x, state=state)  # pyright: ignore
+            x, state = self.norm(x, state=state)
         else:
-            x = self.norm(x)  # pyright: ignore
+            x = self.norm(x)
         x = eqx.filter_vmap(eqx.filter_vmap(self.reduction))(x)  # ... H/2 W/2 2*C
         return x, state
 
 
 class PatchMergingV2(StatefulLayer):
     reduction: eqx.nn.Linear
-    norm: eqx.Module
+    norm: AbstractNorm | AbstractNormStateful
 
     inference: bool
 
     def __init__(
         self,
         dim: int,
-        norm_layer: Callable[..., eqx.Module],
+        norm_layer: Callable[..., AbstractNorm | AbstractNormStateful],
         inference: bool,
         key: PRNGKeyArray,
         dtype: Any,
@@ -167,9 +168,9 @@ class PatchMergingV2(StatefulLayer):
         x = patch_merging_pad(x)
         x = eqx.filter_vmap(eqx.filter_vmap(self.reduction))(x)  # ... H/2 W/2 2*C
         if isinstance(self.norm, StatefulLayer):
-            x, state = self.norm(x, state=state)  # pyright: ignore
+            x, state = self.norm(x, state=state)
         else:
-            x = self.norm(x)  # pyright: ignore
+            x = self.norm(x)
         return x, state
 
 
@@ -286,6 +287,7 @@ class ShiftedWindowAttention(eqx.nn.StatefulLayer):
         ), state
 
 
+# TODO: This is not the Eqx way of doing things!
 class ShiftedWindowAttentionV2(ShiftedWindowAttention):
     def __init__(
         self,

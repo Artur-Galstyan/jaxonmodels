@@ -23,7 +23,7 @@ from torchvision.models.swin_transformer import (
 )
 
 from jaxonmodels.functions import default_floating_dtype
-from jaxonmodels.layers import LayerNorm2d
+from jaxonmodels.layers import LayerNorm
 from jaxonmodels.models.swin_transformer import (
     PatchMerging,
     PatchMergingV2,
@@ -56,7 +56,7 @@ def test_patch_merging_layers(C, H, W):
     torch_patch = TorchPatchMerging(dim=C)
     jax_patch, state = eqx.nn.make_with_state(PatchMerging)(
         dim=C,
-        norm_layer=functools.partial(LayerNorm2d, dtype=dtype),
+        norm_layer=functools.partial(LayerNorm, dtype=dtype),
         inference=False,
         dtype=dtype,
         key=jax.random.key(42),
