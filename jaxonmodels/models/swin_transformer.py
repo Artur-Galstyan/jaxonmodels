@@ -14,6 +14,7 @@ from jaxonmodels.functions import patch_merging_pad, shifted_window_attention
 from jaxonmodels.functions.utils import default_floating_dtype, dtype_to_str
 from jaxonmodels.layers import LayerNorm, StochasticDepth
 from jaxonmodels.layers.abstract import AbstractNorm, AbstractNormStateful
+from jaxonmodels.layers.sequential import BatchedLinear
 from jaxonmodels.statedict2pytree.model_orders import get_swin_model_order
 from jaxonmodels.statedict2pytree.s2p import (
     convert,
@@ -66,7 +67,7 @@ class MLPWithDropout(eqx.nn.StatefulLayer):
         in_dim = in_channels
         for i, hidden_dim in enumerate(hidden_channels[:-1]):
             layers.append(
-                eqx.nn.Linear(
+                BatchedLinear(
                     in_dim, hidden_dim, use_bias=use_bias, key=subkeys[i], dtype=dtype
                 )
             )
@@ -79,7 +80,7 @@ class MLPWithDropout(eqx.nn.StatefulLayer):
             in_dim = hidden_dim
 
         layers.append(
-            eqx.nn.Linear(
+            BatchedLinear(
                 in_dim,
                 hidden_channels[-1],
                 use_bias=use_bias,
@@ -97,13 +98,13 @@ class MLPWithDropout(eqx.nn.StatefulLayer):
             if isinstance(layer, eqx.nn.StatefulLayer):
                 x, state = layer(x, state)
             else:
-                x = eqx.filter_vmap(eqx.filter_vmap(layer))(x)
+                x = layer(x)
 
         return x, state
 
 
 class PatchMerging(StatefulLayer):
-    reduction: eqx.nn.Linear
+    reduction: BatchedLinear
     norm: AbstractNorm | AbstractNormStateful
 
     inference: bool
@@ -117,7 +118,7 @@ class PatchMerging(StatefulLayer):
         dtype: Any,
     ):
         self.inference = inference
-        self.reduction = eqx.nn.Linear(
+        self.reduction = BatchedLinear(
             4 * dim, 2 * dim, use_bias=False, key=key, dtype=dtype
         )
         self.norm = norm_layer(4 * dim)
@@ -134,12 +135,12 @@ class PatchMerging(StatefulLayer):
             x, state = self.norm(x, state=state)
         else:
             x = self.norm(x)
-        x = eqx.filter_vmap(eqx.filter_vmap(self.reduction))(x)  # ... H/2 W/2 2*C
+        x = self.reduction(x)  # ... H/2 W/2 2*C
         return x, state
 
 
 class PatchMergingV2(StatefulLayer):
-    reduction: eqx.nn.Linear
+    reduction: BatchedLinear
     norm: AbstractNorm | AbstractNormStateful
 
     inference: bool
@@ -153,7 +154,7 @@ class PatchMergingV2(StatefulLayer):
         dtype: Any,
     ):
         self.inference = inference
-        self.reduction = eqx.nn.Linear(
+        self.reduction = BatchedLinear(
             4 * dim, 2 * dim, use_bias=False, key=key, dtype=dtype
         )
         self.norm = norm_layer(2 * dim)
@@ -166,7 +167,7 @@ class PatchMergingV2(StatefulLayer):
         key: PRNGKeyArray | None = None,
     ) -> tuple[Float[Array, "H_half W_half C*2"], eqx.nn.State]:
         x = patch_merging_pad(x)
-        x = eqx.filter_vmap(eqx.filter_vmap(self.reduction))(x)  # ... H/2 W/2 2*C
+        x = self.reduction(x)  # ... H/2 W/2 2*C
         if isinstance(self.norm, StatefulLayer):
             x, state = self.norm(x, state=state)
         else:
@@ -184,8 +185,8 @@ class ShiftedWindowAttention(eqx.nn.StatefulLayer):
     qkv: eqx.nn.Linear
     proj: eqx.nn.Linear
 
-    cpb_mlp_ln1: eqx.nn.Linear | None
-    cpb_mlp_ln2: eqx.nn.Linear | None
+    cpb_mlp_ln1: BatchedLinear | None
+    cpb_mlp_ln2: BatchedLinear | None
     inference: bool
 
     window_size: list[int] = eqx.field(static=True)
@@ -320,11 +321,11 @@ class ShiftedWindowAttentionV2(ShiftedWindowAttention):
         self.logit_scale = jnp.log(10 * jnp.ones((num_heads, 1, 1)))
         # mlp to generate continuous relative position bias
         key, subkey1, subkey2 = jax.random.split(key, 3)
-        self.cpb_mlp_ln1 = eqx.nn.Linear(
+        self.cpb_mlp_ln1 = BatchedLinear(
             2, 512, use_bias=True, key=subkey1, dtype=dtype
         )
 
-        self.cpb_mlp_ln2 = eqx.nn.Linear(
+        self.cpb_mlp_ln2 = BatchedLinear(
             512, num_heads, use_bias=False, key=subkey2, dtype=dtype
         )
         if qkv_bias:
@@ -374,11 +375,9 @@ class ShiftedWindowAttentionV2(ShiftedWindowAttention):
         relative_coords_table = state.get(self.relative_coords_table)
         relative_position_index = state.get(self.relative_position_index)
 
-        cpb = eqx.filter_vmap(eqx.filter_vmap(eqx.filter_vmap(self.cpb_mlp_ln1)))(
-            relative_coords_table
-        )
+        cpb = self.cpb_mlp_ln1(relative_coords_table)
         cpb = jax.nn.relu(cpb)
-        cpb = eqx.filter_vmap(eqx.filter_vmap(eqx.filter_vmap(self.cpb_mlp_ln2)))(cpb)
+        cpb = self.cpb_mlp_ln2(cpb)
 
         relative_position_bias = get_relative_position_bias(
             cpb.reshape(-1, self.num_heads),
@@ -410,11 +409,11 @@ class ShiftedWindowAttentionV2(ShiftedWindowAttention):
 
 
 class SwinTransformerBlock(StatefulLayer):
-    norm1: eqx.Module
+    norm1: AbstractNorm
     attn: eqx.Module
 
     stochastic_depth: StochasticDepth
-    norm2: eqx.Module
+    norm2: AbstractNorm
     mlp: MLPWithDropout
 
     def __init__(
@@ -427,7 +426,7 @@ class SwinTransformerBlock(StatefulLayer):
         dropout: float,
         attention_dropout: float,
         stochastic_depth_prob: float,
-        norm_layer: Callable[..., eqx.Module],
+        norm_layer: Callable[..., AbstractNorm],
         attn_layer: Callable[..., eqx.Module],
         key: PRNGKeyArray,
         inference: bool,
@@ -470,11 +469,11 @@ class SwinTransformerBlock(StatefulLayer):
         self, x: Float[Array, "H W C"], state: eqx.nn.State, key: PRNGKeyArray
     ) -> tuple[Array, eqx.nn.State]:
         key, subkey = jax.random.split(key)
-        x_norm = eqx.filter_vmap(eqx.filter_vmap(self.norm1))(x)  # pyright: ignore
+        x_norm = eqx.filter_vmap(eqx.filter_vmap(self.norm1))(x)
         attn, state = self.attn(x_norm, state)  # pyright: ignore
-        x = x + self.stochastic_depth(attn, key=key)  # pyright: ignore
-        x_norm = eqx.filter_vmap(eqx.filter_vmap(self.norm2))(x)  # pyright: ignore
-        mlp_o, state = self.mlp(x_norm, state)  # pyright: ignore
+        x = x + self.stochastic_depth(attn, key=key)
+        x_norm = eqx.filter_vmap(eqx.filter_vmap(self.norm2))(x)
+        mlp_o, state = self.mlp(x_norm, state)
         x = x + self.stochastic_depth(mlp_o, key=subkey)
         return x, state
 
@@ -490,7 +489,7 @@ class SwinTransformerBlockV2(SwinTransformerBlock):
         dropout: float,
         attention_dropout: float,
         stochastic_depth_prob: float,
-        norm_layer: Callable[..., eqx.Module],
+        norm_layer: Callable[..., AbstractNorm],
         attn_layer: Callable[..., eqx.Module],
         key: PRNGKeyArray,
         inference: bool,
@@ -519,12 +518,12 @@ class SwinTransformerBlockV2(SwinTransformerBlock):
 
         # Apply attention first, then norm (different from V1)
         attn, state = self.attn(x, state)  # pyright: ignore
-        attn_norm = eqx.filter_vmap(eqx.filter_vmap(self.norm1))(attn)  # pyright: ignore
-        x = x + self.stochastic_depth(attn_norm, key=key)  # pyright: ignore
+        attn_norm = eqx.filter_vmap(eqx.filter_vmap(self.norm1))(attn)
+        x = x + self.stochastic_depth(attn_norm, key=key)
 
         # Apply MLP first, then norm (different from V1)
-        mlp_o, state = self.mlp(x, state)  # pyright: ignore
-        mlp_norm = eqx.filter_vmap(eqx.filter_vmap(self.norm2))(mlp_o)  # pyright: ignore
+        mlp_o, state = self.mlp(x, state)
+        mlp_norm = eqx.filter_vmap(eqx.filter_vmap(self.norm2))(mlp_o)
         x = x + self.stochastic_depth(mlp_norm, key=subkey)
 
         return x, state
@@ -550,7 +549,7 @@ class SwinTransformer(eqx.Module):
         attention_dropout: float,
         stochastic_depth_prob: float,
         num_classes: int,
-        norm_layer: Callable[..., eqx.Module] | None,
+        norm_layer: Callable[..., AbstractNorm] | None,
         block: Callable[..., eqx.Module] | None,
         downsample_layer: Callable[..., eqx.Module],
         attn_layer: Callable[..., eqx.Module],

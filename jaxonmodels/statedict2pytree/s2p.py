@@ -257,3 +257,18 @@ def convert(
             pytree = replace_node(pytree, j.path, new_value, state_indices)
 
     return pytree
+
+
+def autoconvert(pytree, weights_dict):
+    torchfields = state_dict_to_fields(weights_dict)
+    jaxfields, state_indices = pytree_to_fields(pytree)
+
+    pytree = convert(
+        weights_dict,
+        pytree,
+        jaxfields,
+        state_indices,
+        torchfields,
+    )
+
+    return pytree

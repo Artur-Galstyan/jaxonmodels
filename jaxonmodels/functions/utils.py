@@ -3,7 +3,7 @@ from itertools import repeat
 import jax
 import jax.numpy as jnp
 from beartype.typing import Any
-from jaxtyping import Array, Float
+from jaxtyping import Array, Float, PRNGKeyArray
 
 
 def make_divisible(v: float, divisor: int, min_value: int | None = None) -> int:
@@ -62,3 +62,16 @@ def patch_merging_pad(x: Float[Array, "H W C"]) -> Array:
     x3 = x[1::2, 1::2, :]
     x = jnp.concatenate([x0, x1, x2, x3], axis=-1)
     return x
+
+
+def default_init(
+    key: PRNGKeyArray, shape: tuple[int, ...], dtype: Any, lim: float
+) -> jax.Array:
+    if jnp.issubdtype(dtype, jnp.complexfloating):
+        real_dtype = jnp.finfo(dtype).dtype
+        rkey, ikey = jax.random.split(key, 2)
+        real = jax.random.uniform(rkey, shape, real_dtype, minval=-lim, maxval=lim)
+        imag = jax.random.uniform(ikey, shape, real_dtype, minval=-lim, maxval=lim)
+        return real.astype(dtype) + 1j * imag.astype(dtype)
+    else:
+        return jax.random.uniform(key, shape, dtype, minval=-lim, maxval=lim)
