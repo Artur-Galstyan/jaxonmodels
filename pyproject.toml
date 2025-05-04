@@ -22,7 +22,6 @@ dependencies = [
     "pytest",
     "ftfy",
     "regex",
-    "grain",
 ]
 [project.optional-dependencies]
 dev = ["pre-commit", "pytest", "mkdocs"]
@@ -42,11 +41,9 @@ fixable = ["I001", "F401"]
 ignore = ["E402", "E721", "E731", "E741", "F722", "F821"]
 select = ["E", "F", "I001"]
 
-
 [tool.pyright]
 reportIncompatibleMethodOverride = true
 reportMissingImports = false
-
 
 [build-system]
 requires = ["hatchling>=1.26.1"]
