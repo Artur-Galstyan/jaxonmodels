@@ -79,6 +79,7 @@ class SiglipVisionEmbeddings(eqx.Module):
             shape=(dim, new_height, new_width),
             method="bicubic",
         )
+
         patch_pos_embed = jnp.transpose(patch_pos_embed, (1, 2, 0)).reshape(1, -1, dim)
         return patch_pos_embed
 
@@ -87,9 +88,9 @@ class SiglipVisionEmbeddings(eqx.Module):
         target_dtype = self.patch_embedding.weight.dtype
         patch_embeds = self.patch_embedding(pixel_values.astype(dtype=target_dtype))
         width, grid, _ = patch_embeds.shape
-        embeddings = patch_embeds.reshape(grid**2, width).transpose(0, 1)
-
+        embeddings = patch_embeds.reshape(width, grid**2).T
         if interpolate_pos_encoding:
+            print(f"{embeddings.shape=}, {embeddings[0][:5]=}")
             embeddings = embeddings + self.interpolate_pos_encoding(
                 embeddings, img_height, img_width
             )

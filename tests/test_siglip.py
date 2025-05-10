@@ -12,6 +12,9 @@ from jaxonmodels.statedict2pytree import s2p
 
 
 def test_SiglipVisionEmbeddings():
+    np.random.seed(42)
+    torch.manual_seed(42)
+
     class TempConfig(BaseModel):
         hidden_size: int
         image_size: int
@@ -37,12 +40,19 @@ def test_SiglipVisionEmbeddings():
     t_out = torch_embs(torch.from_numpy(test_array))
     j_out = eqx.filter_vmap(jax_embs)(test_array)
     assert t_out.shape == j_out.shape
-    assert np.allclose(t_out.detach().numpy(), np.array(j_out), atol=1e-4)
 
+    assert np.allclose(t_out.detach().numpy(), np.array(j_out), atol=1e-5)
+
+    # the following test would fail because
+    # pytorch's interpolate function and jax's image.resize function
+    # use different kernels for the bicubic interpolation
     # test_array = np.ones(shape=(1, 3, 384, 384))
     # t_out = torch_embs(torch.from_numpy(test_array), True)
 
     # jax_embs = functools.partial(jax_embs, interpolate_pos_encoding=True)
     # j_out = eqx.filter_vmap(jax_embs)(test_array)
 
-    # assert np.allclose(t_out.detach().numpy(), np.array(j_out), atol=1e-4)
+    # print(j_out[0][:5])
+    # print(t_out[0][:5])
+
+    # print(np.allclose(t_out.detach().numpy(), np.array(j_out), atol=1e-3))
