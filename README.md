@@ -19,7 +19,8 @@ These models have been implemented:
 - [x] Mamba
 - [x] ConvNext
 - [x] Swin Transformer
-- [ ] Siglip (in process)
+- [ ] Siglip (in progress)
+- [ ] VQ-VAE (in progress)
 
 
 ## Contributing
