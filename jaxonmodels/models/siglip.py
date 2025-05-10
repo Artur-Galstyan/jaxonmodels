@@ -90,7 +90,6 @@ class SiglipVisionEmbeddings(eqx.Module):
         width, grid, _ = patch_embeds.shape
         embeddings = patch_embeds.reshape(width, grid**2).T
         if interpolate_pos_encoding:
-            print(f"{embeddings.shape=}, {embeddings[0][:5]=}")
             embeddings = embeddings + self.interpolate_pos_encoding(
                 embeddings, img_height, img_width
             )
@@ -99,4 +98,59 @@ class SiglipVisionEmbeddings(eqx.Module):
             embeddings = embeddings + eqx.filter_vmap(self.position_embedding)(
                 position_ids
             )
+        return embeddings
+
+
+class SiglipTextEmbeddings(eqx.Module):
+    token_embedding: eqx.nn.Embedding
+    position_embedding: eqx.nn.Embedding
+
+    def __init__(
+        self,
+        embed_dim: int,
+        vocab_size: int,
+        max_position_embeddings: int,
+        key: PRNGKeyArray,
+        dtype: Any | None = None,
+    ):
+        if not dtype:
+            dtype = default_floating_dtype()
+
+        assert dtype is not None
+
+        key, token_embd_key, pos_embd_key = jax.random.split(key, 3)
+        self.token_embedding = eqx.nn.Embedding(
+            vocab_size, embed_dim, dtype=dtype, key=token_embd_key
+        )
+        self.position_embedding = eqx.nn.Embedding(
+            max_position_embeddings, embed_dim, dtype=dtype, key=pos_embd_key
+        )
+
+    def __call__(
+        self,
+        input_ids: Array | None,
+        position_ids: Array | None = None,
+        inputs_embeds: Array | None = None,
+    ) -> Array:
+        if input_ids is not None:
+            seq_length = input_ids.shape[-1]
+        else:
+            assert inputs_embeds is not None
+            seq_length = inputs_embeds.shape[-2]
+
+        max_position_embedding, *_ = self.position_embedding.weight.shape
+        if position_ids is None:
+            position_ids = jax.lax.dynamic_slice_in_dim(
+                jnp.arange(max_position_embedding), start_index=0, slice_size=seq_length
+            )
+
+        if inputs_embeds is None:
+            assert input_ids is not None
+            inputs_embeds = eqx.filter_vmap(eqx.filter_vmap(self.token_embedding))(
+                input_ids
+            )
+            assert inputs_embeds is not None
+
+        position_embeddings = eqx.filter_vmap(self.position_embedding)(position_ids)
+        embeddings = inputs_embeds + position_embeddings
         return embeddings

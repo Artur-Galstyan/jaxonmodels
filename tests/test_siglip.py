@@ -1,13 +1,17 @@
 import equinox as eqx
 import jax
+import jax.numpy as jnp
 import numpy as np
 import torch
 from pydantic import BaseModel
 from transformers.models.siglip.modeling_siglip import (
+    SiglipTextEmbeddings as TorchSiglipTextEmbeddings,
+)
+from transformers.models.siglip.modeling_siglip import (
     SiglipVisionEmbeddings as TorchSiglipVisionEmbeddings,
 )
 
-from jaxonmodels.models.siglip import SiglipVisionEmbeddings
+from jaxonmodels.models.siglip import SiglipTextEmbeddings, SiglipVisionEmbeddings
 from jaxonmodels.statedict2pytree import s2p
 
 
@@ -56,3 +60,51 @@ def test_SiglipVisionEmbeddings():
     # print(t_out[0][:5])
 
     # print(np.allclose(t_out.detach().numpy(), np.array(j_out), atol=1e-3))
+
+
+def test_SiglipTextEmbeddings():
+    np.random.seed(42)
+    torch.manual_seed(42)
+
+    class TempConfig(BaseModel):
+        attention_dropout: float | None = None
+        bos_token_id: int | None = None
+        eos_token_id: int | None = None
+        hidden_act: str | None = None
+        hidden_size: int | None = None
+        intermediate_size: int | None = None
+        layer_norm_eps: float | None = None
+        max_position_embeddings: int | None = None
+        model_type: str | None = None
+        num_attention_heads: int | None = None
+        num_hidden_layers: int | None = None
+        pad_token_id: int | None = None
+        projection_size: int | None = None
+        torch_dtype: str | None = None
+        vocab_size: int | None = None
+        image_size: int | None = None
+        num_channels: int | None = None
+        patch_size: int | None = None
+
+    config = TempConfig(hidden_size=768, vocab_size=32000, max_position_embeddings=64)
+
+    torch_embeds = TorchSiglipTextEmbeddings(config)  # pyright: ignore
+
+    jax_embeds = SiglipTextEmbeddings(
+        embed_dim=config.hidden_size,  # pyright: ignore
+        vocab_size=config.vocab_size,  # pyright: ignore
+        max_position_embeddings=config.max_position_embeddings,  # pyright: ignore
+        key=jax.random.key(44),
+    )  # pyright: ignore
+
+    jax_embeds = s2p.autoconvert(jax_embeds, torch_embeds.state_dict())
+    assert config.max_position_embeddings is not None
+    input_ids = np.random.randint(
+        low=0, high=1000, size=(3, config.max_position_embeddings)
+    )
+
+    t_out = torch_embeds(torch.from_numpy(input_ids))
+
+    j_out = jax_embeds(jnp.array(input_ids))
+
+    assert np.allclose(t_out.detach().numpy(), np.array(j_out), atol=1e-5)
