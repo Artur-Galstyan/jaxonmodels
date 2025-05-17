@@ -2,8 +2,9 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 from beartype.typing import Any
-from jaxtyping import Array, PRNGKeyArray
+from jaxtyping import Array, Float, PRNGKeyArray
 
+from jaxonmodels.functions.attention import multi_head_attention_forward
 from jaxonmodels.functions.utils import default_floating_dtype
 
 
@@ -154,3 +155,91 @@ class SiglipTextEmbeddings(eqx.Module):
         position_embeddings = eqx.filter_vmap(self.position_embedding)(position_ids)
         embeddings = inputs_embeds + position_embeddings
         return embeddings
+
+
+class SiglipAttention(eqx.Module):
+    k_proj: eqx.nn.Linear
+    v_proj: eqx.nn.Linear
+    q_proj: eqx.nn.Linear
+    out_proj: eqx.nn.Linear
+
+    embed_dim: int = eqx.field(static=True)
+    head_dim: int = eqx.field(static=True)
+    num_heads: int = eqx.field(static=True)
+
+    dropout: float = eqx.field(static=True)
+    scale: float = eqx.field(static=True)
+    is_causal: bool = eqx.field(static=True)
+
+    inference: bool
+
+    def __init__(
+        self,
+        embed_dim: int,
+        num_heads: int,
+        attention_dropout: float,
+        dtype: Any | None,
+        inference: bool,
+        key: PRNGKeyArray,
+    ):
+        if dtype is None:
+            dtype = default_floating_dtype()
+        assert dtype is not None
+        self.embed_dim = embed_dim
+        self.num_heads = num_heads
+        self.head_dim = self.embed_dim // self.num_heads
+        if self.head_dim * self.num_heads != self.embed_dim:
+            raise ValueError(
+                f"embed_dim must be divisible by num_heads "
+                f"(got `embed_dim`: {self.embed_dim} and `num_heads`: {num_heads})."
+            )
+        self.scale = self.head_dim**-0.5
+        self.dropout = attention_dropout
+        self.is_causal = False
+        self.inference = inference
+
+        key, *subkeys = jax.random.split(key, 5)
+
+        self.k_proj = eqx.nn.Linear(
+            self.embed_dim, self.embed_dim, key=subkeys[0], dtype=dtype
+        )
+        self.v_proj = eqx.nn.Linear(
+            self.embed_dim, self.embed_dim, key=subkeys[1], dtype=dtype
+        )
+        self.q_proj = eqx.nn.Linear(
+            self.embed_dim, self.embed_dim, key=subkeys[2], dtype=dtype
+        )
+        self.out_proj = eqx.nn.Linear(
+            self.embed_dim, self.embed_dim, key=subkeys[3], dtype=dtype
+        )
+
+    def __call__(
+        self,
+        hidden_states: Float[Array, "seq_len embed_dim"],
+        attention_mask: Array | None,
+        output_attentions: bool | None,
+        key: PRNGKeyArray | None,
+    ) -> tuple[Array, Array | None]:
+        seq_length, embed_dim = hidden_states.shape
+
+        attn_output, attn_weights = multi_head_attention_forward(
+            query=hidden_states,
+            key=hidden_states,
+            value=hidden_states,
+            use_separate_proj_weight=True,
+            embed_dim_to_check=self.embed_dim,
+            q_proj_weight=self.q_proj.weight,
+            k_proj_weight=self.k_proj.weight,
+            v_proj_weight=self.v_proj.weight,
+            out_proj_weight=self.out_proj.weight,
+            out_proj_bias=self.out_proj.bias,
+            attn_mask=attention_mask,
+            num_heads=self.num_heads,
+            inference=self.inference,
+            attention_weight_scaling_factor=self.scale,
+            dropout_p=0.0 if not self.inference else self.dropout,
+            dropout_key=key,
+            need_weights=output_attentions if output_attentions is not None else False,
+        )
+
+        return attn_output, attn_weights

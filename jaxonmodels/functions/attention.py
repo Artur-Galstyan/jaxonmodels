@@ -38,6 +38,7 @@ def multi_head_attention_forward(
     average_attn_weights: bool = True,
     is_causal: bool = False,
     dropout_key: PRNGKeyArray | None = None,
+    attention_weight_scaling_factor: float | None = None,
 ) -> tuple[
     Float[Array, "tgt_len d_model"],
     Float[Array, "num_heads tgt_len src_len"]
@@ -160,8 +161,14 @@ def multi_head_attention_forward(
     k = jnp.transpose(k, (1, 0, 2))
     v = jnp.transpose(v, (1, 0, 2))
 
-    scale = jnp.sqrt(head_dim)
-    attn_output_weights = jnp.matmul(q, jnp.transpose(k, (0, 2, 1))) / scale
+    if attention_weight_scaling_factor is None:
+        attn_output_weights = jnp.matmul(q, jnp.transpose(k, (0, 2, 1))) / jnp.sqrt(
+            head_dim
+        )
+    else:
+        attn_output_weights = (
+            jnp.matmul(q, jnp.transpose(k, (0, 2, 1))) * attention_weight_scaling_factor
+        )
 
     if key_padding_mask is not None:
         padding_mask = key_padding_mask.reshape(1, 1, src_len)
