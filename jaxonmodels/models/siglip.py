@@ -1,7 +1,7 @@
 import equinox as eqx
 import jax
 import jax.numpy as jnp
-from beartype.typing import Any
+from beartype.typing import Any, Callable
 from jaxtyping import Array, Float, PRNGKeyArray
 
 from jaxonmodels.functions.attention import multi_head_attention_forward
@@ -243,3 +243,33 @@ class SiglipAttention(eqx.Module):
         )
 
         return attn_output, attn_weights
+
+
+class SiglipMLP(eqx.Module):
+    activation_fn: Callable
+    fc1: eqx.nn.Linear
+    fc2: eqx.nn.Linear
+
+    def __init__(
+        self,
+        hidden_size: int,
+        intermediate_size: int,
+        hidden_act: Callable,
+        dtype: Any | None,
+        key: PRNGKeyArray,
+    ):
+        if dtype is None:
+            dtype = default_floating_dtype()
+        assert dtype is not None
+        self.activation_fn = hidden_act
+        key, subkey = jax.random.split(key)
+        self.fc1 = eqx.nn.Linear(hidden_size, intermediate_size, key=key, dtype=dtype)
+        self.fc2 = eqx.nn.Linear(
+            intermediate_size, hidden_size, key=subkey, dtype=dtype
+        )
+
+    def __call__(self, hidden_states: Array) -> Array:
+        hidden_states = self.fc1(hidden_states)
+        hidden_states = self.activation_fn(hidden_states)
+        hidden_states = self.fc2(hidden_states)
+        return hidden_states
