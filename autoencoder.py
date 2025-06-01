@@ -97,18 +97,19 @@ model = Autoencoder(dim=784, hidden_dim=256, z_dim=64, key=jax.random.key(22))
 learning_rate = 3e-4
 optimizer = optax.adam(learning_rate)
 opt_state = optimizer.init(eqx.filter(model, eqx.is_array))
-n_epochs = 50
+n_epochs = 20
 
 metrics = LossMetrics.empty()
 
-for epoch in tqdm(range(n_epochs)):
+epoch_bar = tqdm(range(n_epochs))
+for epoch in epoch_bar:
     for images, _ in train_ds:
         images = jnp.array(images)
         loss, model, opt_state = step(model, images, optimizer, opt_state)
-
         metrics = metrics.merge(LossMetrics.single_from_model_output(loss=loss))
 
-    print(f"Epoch {epoch}, loss {metrics.compute()}")
+    loss_value = metrics.compute()
+    epoch_bar.set_postfix_str(f"loss: {loss_value}")
 
 
 images, labels = next(iter(train_ds.take(1)))
