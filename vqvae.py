@@ -98,7 +98,6 @@ class Decoder(eqx.Module):
                 eqx.nn.Linear(hidden_dim, hidden_dim, key=subkeys[1]),
                 eqx.nn.Lambda(jax.nn.relu),
                 eqx.nn.Linear(hidden_dim, output_dim, key=subkeys[2]),
-                eqx.nn.Lambda(jax.nn.sigmoid),
             ]
         )
 
@@ -132,16 +131,13 @@ def vae_loss(
     keys = jax.random.split(key, len(x))
     reconstructed_x, mu, logvar = eqx.filter_vmap(model)(x, keys)
 
-    recon_loss = jnp.mean(
-        -jnp.sum(
-            x * jnp.log(reconstructed_x + 1e-8)
-            + (1 - x) * jnp.log(1 - reconstructed_x + 1e-8)
-        )
+    recon_loss = jnp.mean(jnp.sum(jnp.square(x - reconstructed_x), axis=-1))
+
+    kl_loss = -0.5 * jnp.mean(
+        jnp.sum(1 + logvar - jnp.square(mu) - jnp.exp(logvar), axis=-1)
     )
 
-    kl_loss = jnp.mean(-0.5 * jnp.sum(1 + logvar - jnp.square(mu) - jnp.exp(logvar)))
     total_loss = recon_loss + kl_loss
-
     return total_loss
 
 
