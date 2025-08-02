@@ -46,3 +46,8 @@ select = ["E", "F", "I001"]
 [tool.pyright]
 reportIncompatibleMethodOverride = true
 reportMissingImports = false
+
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
