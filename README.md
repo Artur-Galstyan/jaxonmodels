@@ -20,7 +20,7 @@ These models have been implemented:
 - [x] ConvNext
 - [x] Swin Transformer
 - [ ] Siglip (in progress)
-- [ ] VQ-VAE (in progress)
+- [x] VQ-VAE (in progress)
 
 
 ## Contributing
