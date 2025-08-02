@@ -3,7 +3,7 @@ name = "jaxonmodels"
 version = "0.2.2"
 description = "JAX models for deep learning"
 readme = "README.md"
-requires-python = "~=3.11"
+requires-python = ">=3.11"
 license = { file = "LICENSE" }
 authors = [{ name = "Artur A. Galstyan", email = "mail@arturgalstyan.dev" }]
 dependencies = [
