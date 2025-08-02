@@ -37,7 +37,7 @@ def main():
 
     # Preprocess the image
     input_tensor = preprocess(img)
-    input_batch = input_tensor.unsqueeze(0)  # Add batch dimension
+    input_batch = input_tensor.unsqueeze(0)  # Add batch dimension # pyright: ignore
     input_batch = jnp.array(input_batch.numpy(), dtype=jnp.float32)
     print(f"{input_batch.shape=}")
 
