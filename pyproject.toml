@@ -1,9 +1,9 @@
 [project]
 name = "jaxonmodels"
-version = "0.2.1"
+version = "0.2.2"
 description = "JAX models for deep learning"
 readme = "README.md"
-requires-python = "~=3.10"
+requires-python = ">=3.11"
 license = { file = "LICENSE" }
 authors = [{ name = "Artur A. Galstyan", email = "mail@arturgalstyan.dev" }]
 dependencies = [
@@ -46,8 +46,3 @@ select = ["E", "F", "I001"]
 [tool.pyright]
 reportIncompatibleMethodOverride = true
 reportMissingImports = false
-
-
-[build-system]
-requires = ["hatchling>=1.26.1"]
-build-backend = "hatchling.build"

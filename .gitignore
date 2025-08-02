@@ -169,3 +169,5 @@ main.py
 params.json
 *.pth
 checkpoints/
+*.eqx
+.ruff_cache

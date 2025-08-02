@@ -319,7 +319,7 @@ def test_swin_transformer_block(
         dropout=dropout,
         attention_dropout=attention_dropout,
         stochastic_depth_prob=stochastic_depth_prob,
-        norm_layer=functools.partial(eqx.nn.LayerNorm, eps=1e-05),
+        norm_layer=functools.partial(eqx.nn.LayerNorm, eps=1e-05),  # pyright: ignore
         attn_layer=ShiftedWindowAttention,
         inference=False,
         dtype=dtype,
@@ -423,7 +423,7 @@ def test_swin_transformer_blockv2(
         dropout=dropout,
         attention_dropout=attention_dropout,
         stochastic_depth_prob=stochastic_depth_prob,
-        norm_layer=functools.partial(eqx.nn.LayerNorm, eps=1e-05),
+        norm_layer=functools.partial(eqx.nn.LayerNorm, eps=1e-05),  # pyright: ignore
         attn_layer=ShiftedWindowAttentionV2,
         inference=False,
         dtype=dtype,
