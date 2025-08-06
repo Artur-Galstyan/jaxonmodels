@@ -6,6 +6,12 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 import torch
+from statedict2pytree import (
+    convert,
+    move_running_fields_to_the_end,
+    pytree_to_fields,
+    state_dict_to_fields,
+)
 from torch.nn.modules import BatchNorm2d
 from torchvision.models.efficientnet import MBConv as TorchMBConv
 from torchvision.models.efficientnet import MBConvConfig as TorchMBConvConfig
@@ -17,12 +23,6 @@ from jaxonmodels.layers import BatchNorm, ConvNormActivation, SqueezeExcitation
 from jaxonmodels.models.efficientnet import (
     MBConv,
     MBConvConfig,
-)
-from jaxonmodels.statedict2pytree.s2p import (
-    convert,
-    move_running_fields_to_the_end,
-    pytree_to_fields,
-    state_dict_to_fields,
 )
 
 
