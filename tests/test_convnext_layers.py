@@ -4,17 +4,17 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 import numpy as np
-import pytest  # <-- Import pytest
+import pytest
 import torch
-from torchvision.models.convnext import CNBlock as TorchCNBlock
-
-from jaxonmodels.models.convnext import CNBlock
-from jaxonmodels.statedict2pytree.s2p import (
+from statedict2pytree import (
     convert,
     move_running_fields_to_the_end,
     pytree_to_fields,
     state_dict_to_fields,
 )
+from torchvision.models.convnext import CNBlock as TorchCNBlock
+
+from jaxonmodels.models.convnext import CNBlock
 
 
 # Define the different parameter sets you want to test

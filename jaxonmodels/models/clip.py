@@ -7,17 +7,16 @@ import jax
 import jax.numpy as jnp
 from beartype.typing import Any, Literal
 from jaxtyping import Array, Float, Int, PRNGKeyArray, PyTree
+from statedict2pytree import (
+    convert,
+    move_running_fields_to_the_end,
+    pytree_to_fields,
+    state_dict_to_fields,
+)
 
 import jaxonmodels.functions as F
 from jaxonmodels.functions import default_floating_dtype, dtype_to_str
 from jaxonmodels.layers import BatchNorm, MultiheadAttention
-from jaxonmodels.statedict2pytree.s2p import (
-    convert,
-    move_running_fields_to_the_end,
-    pytree_to_fields,
-    serialize_pytree,
-    state_dict_to_fields,
-)
 
 _MODELS = {
     "RN50": "https://openaipublic.azureedge.net/clip/models/afeb0e10f9e5a86da6080e35cf09123aca3b358a0c3e3b6c78a7b63bc04b6762/RN50.pt",
@@ -796,11 +795,11 @@ def _with_weights(
         )
 
         if cache:
-            serialize_pytree(
-                (clip, state),
+            eqx.tree_serialise_leaves(
                 str(
                     Path(jaxonmodels_dir) / f"{model.replace('/', '_')}-{dtype_str}.eqx"
                 ),
+                (clip, state),
             )
     return clip, state
 

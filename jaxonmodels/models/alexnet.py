@@ -7,15 +7,14 @@ import jax
 import jax.numpy as jnp
 from beartype.typing import Any
 from jaxtyping import Array, Float, PRNGKeyArray
+from statedict2pytree.converter import (
+    convert,
+    pytree_to_fields,
+    state_dict_to_fields,
+)
 
 from jaxonmodels.functions import default_floating_dtype, dtype_to_str
 from jaxonmodels.layers import LocalResponseNormalization
-from jaxonmodels.statedict2pytree.s2p import (
-    convert,
-    pytree_to_fields,
-    serialize_pytree,
-    state_dict_to_fields,
-)
 
 
 class AlexNet(eqx.Module):
@@ -196,8 +195,8 @@ def alexnet(
     alexnet = convert(weights_dict, alexnet, jaxfields, None, torchfields, dtype=dtype)
 
     if cache:
-        serialize_pytree(
-            alexnet, str(Path(jaxonmodels_dir) / f"alexnet-{dtype_str}.eqx")
+        eqx.tree_serialise_leaves(
+            str(Path(jaxonmodels_dir) / f"alexnet-{dtype_str}.eqx"), alexnet
         )
 
     return alexnet

@@ -10,4 +10,11 @@ repos:
     hooks:
       - id: pyright
         additional_dependencies:
-          [beartype, jax, jaxtyping, pytest, typing_extensions]
+          [
+            beartype,
+            jax,
+            jaxtyping,
+            pytest,
+            typing_extensions,
+            statedict2pytree>=1.0.1,
+          ]

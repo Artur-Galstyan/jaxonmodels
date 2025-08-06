@@ -9,6 +9,11 @@ import jax.numpy as jnp
 from beartype.typing import Any, Callable, Literal
 from equinox.nn import StatefulLayer
 from jaxtyping import Array, Float, PRNGKeyArray, PyTree
+from statedict2pytree import (
+    convert,
+    pytree_to_fields,
+    state_dict_to_fields,
+)
 
 from jaxonmodels.functions import patch_merging_pad, shifted_window_attention
 from jaxonmodels.functions.utils import default_floating_dtype, dtype_to_str
@@ -16,12 +21,6 @@ from jaxonmodels.layers import LayerNorm, StochasticDepth
 from jaxonmodels.layers.abstract import AbstractNorm, AbstractNormStateful
 from jaxonmodels.layers.sequential import BatchedLinear
 from jaxonmodels.statedict2pytree.model_orders import get_swin_model_order
-from jaxonmodels.statedict2pytree.s2p import (
-    convert,
-    pytree_to_fields,
-    serialize_pytree,
-    state_dict_to_fields,
-)
 
 _SWIN_MODELS = {
     "swin_t_IMAGENET1K_V1": "https://download.pytorch.org/models/swin_t-704ceda3.pth",
@@ -871,8 +870,7 @@ def _swin_with_weights(
     )
 
     if cache:
-        print(f"Caching JAX model to: {cache_filepath}")
-        serialize_pytree(model, cache_filepath)
+        eqx.tree_serialise_leaves(cache_filepath, model)
 
     return model
 

@@ -6,6 +6,12 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 import torch
+from statedict2pytree import (
+    convert,
+    move_running_fields_to_the_end,
+    pytree_to_fields,
+    state_dict_to_fields,
+)
 from torchvision.models.swin_transformer import PatchMerging as TorchPatchMerging
 from torchvision.models.swin_transformer import PatchMergingV2 as TorchPatchMergingV2
 from torchvision.models.swin_transformer import (
@@ -33,12 +39,7 @@ from jaxonmodels.models.swin_transformer import (
     SwinTransformerBlock,
     SwinTransformerBlockV2,
 )
-from jaxonmodels.statedict2pytree.s2p import (
-    convert,
-    move_running_fields_to_the_end,
-    pytree_to_fields,
-    state_dict_to_fields,
-)
+from jaxonmodels.statedict2pytree import model_orders
 
 
 @pytest.mark.parametrize(
@@ -531,7 +532,8 @@ def test_swinv1():
         (
             jax_swin,
             state,
-        )
+        ),
+        model_order=model_orders.get_swin_model_order(1),
     )
     jax_swin, state = convert(
         weights_dict,
@@ -613,7 +615,8 @@ def test_swinv2():
         (
             jax_swin,
             state,
-        )
+        ),
+        model_order=model_orders.get_swin_model_order(2),
     )
 
     # Print zipped jaxfields and torchfields for debugging

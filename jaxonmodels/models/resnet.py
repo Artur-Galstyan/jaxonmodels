@@ -8,6 +8,12 @@ import jax
 import jax.numpy as jnp
 from beartype.typing import Any, Literal
 from jaxtyping import Array, Float, PRNGKeyArray
+from statedict2pytree import (
+    convert,
+    move_running_fields_to_the_end,
+    pytree_to_fields,
+    state_dict_to_fields,
+)
 
 from jaxonmodels.functions import (
     default_floating_dtype,
@@ -15,13 +21,6 @@ from jaxonmodels.functions import (
     kaiming_init_conv2d,
 )
 from jaxonmodels.layers import BatchNorm
-from jaxonmodels.statedict2pytree.s2p import (
-    convert,
-    move_running_fields_to_the_end,
-    pytree_to_fields,
-    serialize_pytree,
-    state_dict_to_fields,
-)
 
 _MODELS = {
     "resnet18_IMAGENET1K_V1": "https://download.pytorch.org/models/resnet18-f37072fd.pth",
@@ -545,8 +544,7 @@ def _with_weights(
     )
 
     if cache:
-        print(f"Caching model to: {cache_filepath}")
-        serialize_pytree((resnet, state), cache_filepath)
+        eqx.tree_serialise_leaves(cache_filepath, (resnet, state))
 
     return resnet, state
 

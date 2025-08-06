@@ -11,6 +11,12 @@ import jax
 import jax.numpy as jnp
 from beartype.typing import Any, Callable, Literal, Sequence
 from jaxtyping import Array, PRNGKeyArray
+from statedict2pytree import (
+    convert,
+    move_running_fields_to_the_end,
+    pytree_to_fields,
+    state_dict_to_fields,
+)
 
 from jaxonmodels.functions import (
     default_floating_dtype,
@@ -22,13 +28,6 @@ from jaxonmodels.layers import (
     ConvNormActivation,
     SqueezeExcitation,
     StochasticDepth,
-)
-from jaxonmodels.statedict2pytree.s2p import (
-    convert,
-    move_running_fields_to_the_end,
-    pytree_to_fields,
-    serialize_pytree,
-    state_dict_to_fields,
 )
 
 _MODELS = {
@@ -643,7 +642,7 @@ def _with_weights(
     )
 
     if cache:
-        serialize_pytree((efficientnet, state), cache_filepath)
+        eqx.tree_serialise_leaves(cache_filepath, (efficientnet, state))
 
     return efficientnet, state
 

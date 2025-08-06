@@ -9,17 +9,16 @@ import jax.numpy as jnp
 from beartype.typing import Any, Callable, Literal, Sequence
 from equinox.nn import StatefulLayer
 from jaxtyping import Array, Float, PRNGKeyArray
+from statedict2pytree import (
+    convert,
+    move_running_fields_to_the_end,
+    pytree_to_fields,
+    state_dict_to_fields,
+)
 
 from jaxonmodels.functions import default_floating_dtype, dtype_to_str
 from jaxonmodels.layers import ConvNormActivation, LayerNorm, StochasticDepth
 from jaxonmodels.layers.abstract import AbstractNorm
-from jaxonmodels.statedict2pytree.s2p import (
-    convert,
-    move_running_fields_to_the_end,
-    pytree_to_fields,
-    serialize_pytree,
-    state_dict_to_fields,
-)
 
 _MODELS = {
     "convnext_tiny_IMAGENET1K_V1": "https://download.pytorch.org/models/convnext_tiny-983f1562.pth",
@@ -458,7 +457,7 @@ def _with_weights(
     )
 
     if cache:
-        serialize_pytree(model, cache_filepath)
+        eqx.tree_serialise_leaves(cache_filepath, model)
 
     return model
 

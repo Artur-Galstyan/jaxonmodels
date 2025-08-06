@@ -1,7 +1,7 @@
 [project]
 name = "jaxonmodels"
-version = "0.2.2"
-description = "JAX models for deep learning"
+version = "0.2.3"
+description = "JAX models for deep learning in Equinox"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { file = "LICENSE" }
@@ -22,7 +22,7 @@ dependencies = [
     "pytest",
     "ftfy",
     "regex",
-    "grain",
+    "statedict2pytree>=1.0.1",
 ]
 [project.optional-dependencies]
 dev = ["pre-commit", "pytest", "mkdocs"]
