@@ -1,0 +1,2 @@
+class EsmSequenceTokenizer:
+    pass

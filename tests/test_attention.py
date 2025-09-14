@@ -1081,3 +1081,7 @@ def test_shifted_window_attention(
     jax_output = eqx.filter_vmap(pt_shifted_window_attention)(jnp.array(input_data))
 
     np.testing.assert_allclose(jax_output, pt_output.detach().numpy(), atol=1.5e-2)
+
+
+def test_geometric_esm_attention():
+    pass
