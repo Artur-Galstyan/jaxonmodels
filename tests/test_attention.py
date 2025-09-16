@@ -7,6 +7,7 @@ import numpy as np
 import pytest
 import torch
 import torch.nn.functional as F
+from esm.layers.geom_attention import GeometricReasoningOriginalImpl
 from torchvision.models.swin_transformer import (
     shifted_window_attention as torch_shifted_window_attention,
 )
@@ -1084,4 +1085,31 @@ def test_shifted_window_attention(
 
 
 def test_geometric_esm_attention():
-    pass
+    c_s = 1536
+    v_heads = 256
+    num_vector_messages = 1
+    mask_and_zero_frameless = True
+    divide_residual_by_depth = False
+    bias = False
+    geom_attention = GeometricReasoningOriginalImpl(
+        c_s=c_s,
+        v_heads=v_heads,
+        num_vector_messages=num_vector_messages,
+        mask_and_zero_frameless=mask_and_zero_frameless,
+        divide_residual_by_depth=divide_residual_by_depth,
+        bias=bias,
+    )
+    s = np.array(np.random.uniform(size=(1, 262, 1536)), dtype=np.float32)
+    affine = np.array(np.random.uniform(size=(1, 262)), dtype=np.float32)
+    affine_mask = np.random.randint(low=0, high=2, size=(1, 262), dtype=np.bool)
+    sequence_id = None
+    chain_id = np.random.randint(low=0, high=100, size=(1, 262), dtype=np.int64)
+
+    output = geom_attention.forward(
+        torch.from_numpy(s),
+        torch.from_numpy(affine),
+        torch.from_numpy(affine_mask),
+        torch.from_numpy(sequence_id) if sequence_id is not None else None,
+        torch.from_numpy(chain_id),
+    )
+    print(output)
