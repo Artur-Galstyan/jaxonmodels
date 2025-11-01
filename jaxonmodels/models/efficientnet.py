@@ -10,6 +10,7 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 from beartype.typing import Any, Callable, Literal, Sequence
+from jaxonlayers.layers import SqueezeExcitation
 from jaxtyping import Array, PRNGKeyArray
 from statedict2pytree import (
     convert,
@@ -26,7 +27,6 @@ from jaxonmodels.functions.utils import dtype_to_str
 from jaxonmodels.layers import (
     BatchNorm,
     ConvNormActivation,
-    SqueezeExcitation,
     StochasticDepth,
 )
 

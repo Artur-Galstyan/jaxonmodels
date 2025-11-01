@@ -6,6 +6,7 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 from beartype.typing import Any, Literal
+from jaxonlayers.layers import MultiheadAttention
 from jaxtyping import Array, Float, Int, PRNGKeyArray, PyTree
 from statedict2pytree import (
     convert,
@@ -16,7 +17,7 @@ from statedict2pytree import (
 
 import jaxonmodels.functions as F
 from jaxonmodels.functions import default_floating_dtype, dtype_to_str
-from jaxonmodels.layers import BatchNorm, MultiheadAttention
+from jaxonmodels.layers import BatchNorm
 
 _MODELS = {
     "RN50": "https://openaipublic.azureedge.net/clip/models/afeb0e10f9e5a86da6080e35cf09123aca3b358a0c3e3b6c78a7b63bc04b6762/RN50.pt",
