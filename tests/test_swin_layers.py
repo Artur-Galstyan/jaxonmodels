@@ -551,9 +551,7 @@ def test_swinv1():
     )(jnp.array(x), state)
 
     t_out = torch_swin.forward(x_t).detach().numpy()
-
     jax_out = np.array(jax_out)
-
     assert np.allclose(jax_out, t_out, atol=1e-3)
 
 
