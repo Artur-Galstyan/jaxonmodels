@@ -8,6 +8,8 @@ import jax
 import jax.numpy as jnp
 from beartype.typing import Any, Callable, Literal, Sequence
 from equinox.nn import StatefulLayer
+from jaxonlayers.layers import ConvNormActivation, LayerNorm, StochasticDepth
+from jaxonlayers.layers.abstract import AbstractNorm
 from jaxtyping import Array, Float, PRNGKeyArray
 from statedict2pytree import (
     convert,
@@ -17,8 +19,6 @@ from statedict2pytree import (
 )
 
 from jaxonmodels.functions import default_floating_dtype, dtype_to_str
-from jaxonmodels.layers import ConvNormActivation, LayerNorm, StochasticDepth
-from jaxonmodels.layers.abstract import AbstractNorm
 
 _MODELS = {
     "convnext_tiny_IMAGENET1K_V1": "https://download.pytorch.org/models/convnext_tiny-983f1562.pth",

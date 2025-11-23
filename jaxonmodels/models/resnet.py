@@ -7,6 +7,8 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 from beartype.typing import Any, Literal
+from jaxonlayers.functions import kaiming_init_conv2d
+from jaxonlayers.layers import BatchNorm
 from jaxtyping import Array, Float, PRNGKeyArray
 from statedict2pytree import (
     convert,
@@ -18,9 +20,7 @@ from statedict2pytree import (
 from jaxonmodels.functions import (
     default_floating_dtype,
     dtype_to_str,
-    kaiming_init_conv2d,
 )
-from jaxonmodels.layers import BatchNorm
 
 _MODELS = {
     "resnet18_IMAGENET1K_V1": "https://download.pytorch.org/models/resnet18-f37072fd.pth",

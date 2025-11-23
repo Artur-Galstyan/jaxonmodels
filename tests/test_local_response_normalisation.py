@@ -2,8 +2,7 @@ import equinox as eqx
 import jax.numpy as jnp
 import numpy as np
 import torch
-
-from jaxonmodels.layers import LocalResponseNormalization
+from jaxonlayers.layers import LocalResponseNormalization
 
 
 def test_local_response_normalisation_against_pytorch():

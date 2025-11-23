@@ -6,6 +6,7 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 from beartype.typing import Any
+from jaxonlayers.layers import LocalResponseNormalization
 from jaxtyping import Array, Float, PRNGKeyArray
 from statedict2pytree.converter import (
     convert,
@@ -14,7 +15,6 @@ from statedict2pytree.converter import (
 )
 
 from jaxonmodels.functions import default_floating_dtype, dtype_to_str
-from jaxonmodels.layers import LocalResponseNormalization
 
 
 class AlexNet(eqx.Module):

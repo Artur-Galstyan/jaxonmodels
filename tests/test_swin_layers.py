@@ -6,6 +6,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 import torch
+from jaxonlayers.layers import LayerNorm
 from statedict2pytree import (
     convert,
     move_running_fields_to_the_end,
@@ -29,7 +30,6 @@ from torchvision.models.swin_transformer import (
 )
 
 from jaxonmodels.functions import default_floating_dtype
-from jaxonmodels.layers import LayerNorm
 from jaxonmodels.models.swin_transformer import (
     PatchMerging,
     PatchMergingV2,

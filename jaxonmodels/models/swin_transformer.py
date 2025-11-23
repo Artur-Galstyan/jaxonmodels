@@ -9,6 +9,12 @@ import jax.numpy as jnp
 from beartype.typing import Any, Callable, Literal
 from equinox.nn import StatefulLayer
 from jaxonlayers.functions import shifted_window_attention
+from jaxonlayers.layers import (
+    LayerNorm,
+    StochasticDepth,
+)
+from jaxonlayers.layers.abstract import AbstractNorm, AbstractNormStateful
+from jaxonlayers.layers.sequential import BatchedLinear
 from jaxtyping import Array, Float, PRNGKeyArray, PyTree
 from statedict2pytree import (
     convert,
@@ -18,9 +24,6 @@ from statedict2pytree import (
 
 from jaxonmodels.functions import patch_merging_pad
 from jaxonmodels.functions.utils import default_floating_dtype, dtype_to_str
-from jaxonmodels.layers import LayerNorm, StochasticDepth
-from jaxonmodels.layers.abstract import AbstractNorm, AbstractNormStateful
-from jaxonmodels.layers.sequential import BatchedLinear
 from jaxonmodels.statedict2pytree.model_orders import get_swin_model_order
 
 _SWIN_MODELS = {
