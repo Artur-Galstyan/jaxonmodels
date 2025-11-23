@@ -5,7 +5,9 @@ from urllib.request import urlretrieve
 import equinox as eqx
 import jax
 import jax.numpy as jnp
+import jaxonlayers.functions as F
 from beartype.typing import Any, Literal
+from jaxonlayers.layers import BatchNorm, MultiheadAttention
 from jaxtyping import Array, Float, Int, PRNGKeyArray, PyTree
 from statedict2pytree import (
     convert,
@@ -14,9 +16,7 @@ from statedict2pytree import (
     state_dict_to_fields,
 )
 
-import jaxonmodels.functions as F
-from jaxonmodels.functions import default_floating_dtype, dtype_to_str
-from jaxonmodels.layers import BatchNorm, MultiheadAttention
+from jaxonmodels.functions import dtype_to_str
 
 _MODELS = {
     "RN50": "https://openaipublic.azureedge.net/clip/models/afeb0e10f9e5a86da6080e35cf09123aca3b358a0c3e3b6c78a7b63bc04b6762/RN50.pt",
@@ -622,7 +622,7 @@ class CLIP(eqx.Module):
         self.inference = inference
         self.axis_name = axis_name
         if dtype is None:
-            dtype = default_floating_dtype()
+            dtype = F.default_floating_dtype()
         assert dtype is not None
         self.context_length = context_length
         if key is None:
@@ -1134,7 +1134,7 @@ def load_clip(
         and `state` is the initial state (e.g., for BatchNorm statistics).
     """
     if dtype is None:
-        dtype = default_floating_dtype()
+        dtype = F.default_floating_dtype()
     assert dtype is not None
     if key is None:
         key = jax.random.key(42)

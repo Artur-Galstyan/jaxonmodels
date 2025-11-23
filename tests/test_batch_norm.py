@@ -2,9 +2,8 @@ import equinox as eqx
 import jax.numpy as jnp
 import numpy as np
 import torch
+from jaxonlayers.layers import BatchNorm
 from tqdm import tqdm
-
-from jaxonmodels.layers import BatchNorm
 
 
 def test_batch_norm_against_pytorch_ndim_1():

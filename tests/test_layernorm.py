@@ -1,8 +1,7 @@
 import jax.numpy as jnp
 import numpy as np
 import torch
-
-from jaxonmodels.layers import LayerNorm
+from jaxonlayers.layers import LayerNorm
 
 
 def test_layernorm():

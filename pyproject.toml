@@ -1,9 +1,9 @@
 [project]
 name = "jaxonmodels"
-version = "0.2.3"
+version = "1.0.0"
 description = "JAX models for deep learning in Equinox"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.13"
 license = { file = "LICENSE" }
 authors = [{ name = "Artur A. Galstyan", email = "mail@arturgalstyan.dev" }]
 dependencies = [
@@ -17,12 +17,12 @@ dependencies = [
     "typing_extensions",
     "loguru",
     "optax",
-    "jaxonloader",
     "jaxtyping",
     "pytest",
     "ftfy",
     "regex",
-    "statedict2pytree>=1.0.1",
+    "statedict2pytree>=1.0.2",
+    "jaxonlayers>=0.1.4",
 ]
 [project.optional-dependencies]
 dev = ["pre-commit", "pytest", "mkdocs"]

@@ -2,10 +2,10 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 from beartype.typing import Any
+from jaxonlayers.layers import MultiheadAttention
 from jaxtyping import Array, Float, PRNGKeyArray
 
 from jaxonmodels.functions.utils import default_floating_dtype
-from jaxonmodels.layers import MultiheadAttention
 
 
 class ResidualAttentionBlock(eqx.Module):

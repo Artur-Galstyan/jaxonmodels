@@ -10,6 +10,12 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 from beartype.typing import Any, Callable, Literal, Sequence
+from jaxonlayers.layers import (
+    BatchNorm,
+    ConvNormActivation,
+    SqueezeExcitation,
+    StochasticDepth,
+)
 from jaxtyping import Array, PRNGKeyArray
 from statedict2pytree import (
     convert,
@@ -23,12 +29,6 @@ from jaxonmodels.functions import (
     make_divisible,
 )
 from jaxonmodels.functions.utils import dtype_to_str
-from jaxonmodels.layers import (
-    BatchNorm,
-    ConvNormActivation,
-    SqueezeExcitation,
-    StochasticDepth,
-)
 
 _MODELS = {
     "efficientnet_b0_IMAGENET1K_V1": "https://download.pytorch.org/models/efficientnet_b0_rwightman-7f5810bc.pth",
