@@ -38,8 +38,8 @@ name = "array-record"
 version = "0.8.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "absl-py" },
-    { name = "etils", extra = ["epath"] },
+    { name = "absl-py", marker = "sys_platform != 'darwin'" },
+    { name = "etils", extra = ["epath"], marker = "sys_platform != 'darwin'" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/e8/a5/9bc81ff731e45dd61b130a4695bf028b8282e0fb7d3cca080bfee2745cc7/array_record-0.8.2-cp313-cp313-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:6e2ed50f67b0808955c0d3f13e6788556c8321e1e4192c567280f06a795474ea", size = 2407692, upload-time = "2025-10-27T15:42:00.173Z" },
@@ -556,7 +556,7 @@ wheels = [
 
 [[package]]
 name = "jaxonlayers"
-version = "0.1.3"
+version = "0.1.4"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "beartype" },
@@ -564,14 +564,14 @@ dependencies = [
     { name = "jax" },
     { name = "jaxtyping" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/59/7f/e368e69a6bd749f5b3e0ed3ec9c94c08e61028b253d352bd9b089180363b/jaxonlayers-0.1.3.tar.gz", hash = "sha256:c1dec69d7862bd29a08751e707e7ea3c3e945adc0bc35fae604d7fc65e878f4b", size = 71591, upload-time = "2025-10-31T16:38:41.611Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/5b/d3/5844db6ac7af8f416698d70ae3feb4fbc41c82bd2422007614c28eefd539/jaxonlayers-0.1.4.tar.gz", hash = "sha256:4268ac410a0caa03a38c2f7aeb2b77a16f5852bb481cc8dcd8d558369e7f2b86", size = 71624, upload-time = "2025-11-23T20:13:42.263Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/92/b7/df3cf908024c7a84c8a60b10de7aa47196e176ffbcb4c31ad6e74a272e92/jaxonlayers-0.1.3-py3-none-any.whl", hash = "sha256:7b49308f87a4666378d0fd767e2ef970a6be0b1577c6a0d8e69c1ffe6003359c", size = 18142, upload-time = "2025-10-31T16:38:40.659Z" },
+    { url = "https://files.pythonhosted.org/packages/14/87/eda213044f987a8e4ba21fd229b577522ae4e0005023577888e8d93e7ad0/jaxonlayers-0.1.4-py3-none-any.whl", hash = "sha256:fd00a4e2592d911f384829d59a214941d18c651218c18956a49e1d5d6b92b96e", size = 18195, upload-time = "2025-11-23T20:13:40.816Z" },
 ]
 
 [[package]]
 name = "jaxonmodels"
-version = "0.2.3"
+version = "1.0.0"
 source = { editable = "." }
 dependencies = [
     { name = "beartype" },
@@ -618,7 +618,7 @@ requires-dist = [
     { name = "ftfy" },
     { name = "jax" },
     { name = "jaxlib" },
-    { name = "jaxonlayers", specifier = ">=0.1.1" },
+    { name = "jaxonlayers", specifier = ">=0.1.4" },
     { name = "jaxtyping" },
     { name = "loguru" },
     { name = "mkdocs", marker = "extra == 'dev'" },
@@ -630,7 +630,7 @@ requires-dist = [
     { name = "pytest", marker = "extra == 'dev'" },
     { name = "regex" },
     { name = "requests", marker = "extra == 'examples'" },
-    { name = "statedict2pytree", specifier = ">=1.0.1" },
+    { name = "statedict2pytree", specifier = ">=1.0.2" },
     { name = "tensorflow-cpu", marker = "extra == 'examples'" },
     { name = "tensorflow-datasets", marker = "extra == 'examples'" },
     { name = "torch", marker = "extra == 'tests'", index = "https://download.pytorch.org/whl/cpu" },
@@ -1660,7 +1660,7 @@ wheels = [
 
 [[package]]
 name = "statedict2pytree"
-version = "1.0.1"
+version = "1.0.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "beartype" },
@@ -1671,9 +1671,9 @@ dependencies = [
     { name = "pydantic" },
     { name = "tqdm" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/55/e5/09fe11413741c555ac067de40494ee9b84b30ae21ae415a13553d9807318/statedict2pytree-1.0.1.tar.gz", hash = "sha256:1f88438c9432857f139ac8468aac203e55abda7f6c0238965249758a549b029a", size = 102618, upload-time = "2025-08-06T08:50:29.504Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/8a/40/bcbacdfdcd976168c9432378b24b39ac2e9493cc8b4100886427b48f5aeb/statedict2pytree-1.0.2.tar.gz", hash = "sha256:af686b0fabe9e8edf0e2115796093c8661ef73d485be1d44c7062981855ae362", size = 103108, upload-time = "2025-11-01T17:55:18.31Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/49/b3/533bbcdcdf2b5b38c00255b9c058d93aeff8e550752620ac29a45a1be78c/statedict2pytree-1.0.1-py3-none-any.whl", hash = "sha256:7d8302e995f37e8802404236d2ca8f1b16a06d85166d9aff6e96270dd9b968af", size = 4752, upload-time = "2025-08-06T08:50:30.71Z" },
+    { url = "https://files.pythonhosted.org/packages/43/90/391a155f57f8c73a8473803612c6955916c497f96b665aae5609e162f416/statedict2pytree-1.0.2-py3-none-any.whl", hash = "sha256:e4bffca10f8c726a07a8cee985ddd0aaa1be68d6f04a53607bc8319a8af1b4d8", size = 4793, upload-time = "2025-11-01T17:55:17.09Z" },
 ]
 
 [[package]]
