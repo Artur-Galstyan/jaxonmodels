@@ -475,6 +475,10 @@ def test_swin_transformer_blockv2(
 
 
 def test_swinv1():
+    torch.set_num_threads(1)
+    torch.manual_seed(42)
+    np.random.seed(42)
+
     patch_size = [4, 4]
     embed_dim = 96
     depths = [2, 2, 6, 2]
@@ -500,10 +504,8 @@ def test_swinv1():
         block=TorchSwinTransformerBlock,
     )
     torch_swin.eval()
-    np.random.seed(42)
 
     x = np.array(np.random.normal(size=(1, 3, 224, 224)), dtype=np.float32)
-
     x_t = torch.Tensor(x)
 
     jax_swin, state = eqx.nn.make_with_state(SwinTransformer)(
@@ -529,10 +531,7 @@ def test_swinv1():
     torchfields = state_dict_to_fields(weights_dict)
 
     jaxfields, state_indices = pytree_to_fields(
-        (
-            jax_swin,
-            state,
-        ),
+        (jax_swin, state),
         model_order=model_orders.get_swin_model_order(1),
     )
     jax_swin, state = convert(
@@ -556,6 +555,10 @@ def test_swinv1():
 
 
 def test_swinv2():
+    torch.set_num_threads(1)
+    torch.manual_seed(42)
+    np.random.seed(42)
+
     patch_size = [4, 4]
     embed_dim = 96
     depths = [2, 2, 6, 2]
@@ -582,10 +585,8 @@ def test_swinv2():
         block=TorchSwinTransformerBlockV2,
     )
     torch_swin.eval()
-    np.random.seed(42)
 
     x = np.array(np.random.normal(size=(1, 3, 224, 224)), dtype=np.float32)
-
     x_t = torch.Tensor(x)
 
     jax_swin, state = eqx.nn.make_with_state(SwinTransformer)(
@@ -610,16 +611,9 @@ def test_swinv2():
     weights_dict = torch_swin.state_dict()
     torchfields = state_dict_to_fields(weights_dict)
     jaxfields, state_indices = pytree_to_fields(
-        (
-            jax_swin,
-            state,
-        ),
+        (jax_swin, state),
         model_order=model_orders.get_swin_model_order(2),
     )
-
-    # Print zipped jaxfields and torchfields for debugging
-    for t, j in zip(torchfields, jaxfields):
-        print(t.path, t.shape, jax.tree_util.keystr(j.path), j.shape)
 
     jax_swin, state = convert(
         weights_dict,
@@ -637,7 +631,6 @@ def test_swinv2():
     )(jnp.array(x), state)
 
     t_out = torch_swin.forward(x_t).detach().numpy()
-
     jax_out = np.array(jax_out)
 
     assert np.allclose(jax_out, t_out, atol=1e-3)
