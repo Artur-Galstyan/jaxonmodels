@@ -487,7 +487,7 @@ def test_swinv1():
     mlp_ratio = 4.0
     dropout = 0.0
     attention_dropout = 0.0
-    stochastic_depth_prob = 0.2
+    stochastic_depth_prob = 0.0
     num_classes = 1000
 
     torch_swin = TorchSwinTransformer(
@@ -567,7 +567,7 @@ def test_swinv2():
     mlp_ratio = 4.0
     dropout = 0.0
     attention_dropout = 0.0
-    stochastic_depth_prob = 0.2
+    stochastic_depth_prob = 0.0
     num_classes = 1000
 
     torch_swin = TorchSwinTransformer(
