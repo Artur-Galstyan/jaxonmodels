@@ -16,7 +16,7 @@ jobs:
       - name: Install the project
         run: uv sync --locked --all-extras --dev
       - name: Install Torch
-        run: uv pip install torch torchvision
+        run: uv pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
       - name: Run tests
         run: |
-          uv run pytest tests
+          uv run pytest
