@@ -31,6 +31,7 @@ tests = ["torch==2.10.0", "torchvision==0.25.0"]
 
 [tool.uv.sources]
 torch = { index = "pytorch" }
+torchvision = { index = "pytorch" }
 
 [[tool.uv.index]]
 name = "pytorch"
