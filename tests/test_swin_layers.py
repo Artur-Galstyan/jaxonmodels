@@ -561,6 +561,35 @@ def test_swinv1():
         f"After convert - Torch head.weight shape: {torch_head_w.shape}, first 3: {torch_head_w.flatten()[:3]}"
     )
 
+    # Debug: Check state values (relative_position_index should match torch)
+    first_attn = jax_swin.features.layers[1].layers[0].attn
+    jax_rel_pos_idx = state.get(first_attn.relative_position_index)
+    torch_rel_pos_idx = torch_swin.features[1][0].attn.relative_position_index.numpy()
+    print(
+        f"JAX rel_pos_idx shape: {jax_rel_pos_idx.shape}, first 5: {jax_rel_pos_idx.flatten()[:5]}"
+    )
+    print(
+        f"Torch rel_pos_idx shape: {torch_rel_pos_idx.shape}, first 5: {torch_rel_pos_idx.flatten()[:5]}"
+    )
+    print(
+        f"rel_pos_idx match: {np.allclose(np.array(jax_rel_pos_idx), torch_rel_pos_idx)}"
+    )
+
+    # Debug: Check relative_position_bias_table
+    jax_bias_table = np.array(first_attn.relative_position_bias_table)
+    torch_bias_table = (
+        torch_swin.features[1][0].attn.relative_position_bias_table.detach().numpy()
+    )
+    print(
+        f"JAX bias_table shape: {jax_bias_table.shape}, first 3: {jax_bias_table.flatten()[:3]}"
+    )
+    print(
+        f"Torch bias_table shape: {torch_bias_table.shape}, first 3: {torch_bias_table.flatten()[:3]}"
+    )
+    print(
+        f"bias_table match: {np.allclose(jax_bias_table, torch_bias_table, atol=1e-6)}"
+    )
+
     jax_swin, state = eqx.nn.inference_mode((jax_swin, state))
     key = jax.random.key(22)
     jax_swin_pt = functools.partial(jax_swin, key=key)
