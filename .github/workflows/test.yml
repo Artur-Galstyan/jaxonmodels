@@ -1,24 +1,24 @@
 name: Run Tests
 on:
-  push:
-    branches: [main]
-  pull_request:
-    branches: [main]
+    push:
+        branches: [main]
+    pull_request:
+        branches: [main]
 jobs:
-  test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-      - name: Install uv
-        uses: astral-sh/setup-uv@v7
-      - name: Set up Python
-        run: uv python install
-      - name: Install the project
-        run: uv sync --locked --all-extras --dev
-      - name: Reinstall Torch for CPU
-        run: |
-          uv pip uninstall torch torchvision
-          uv pip install "torch==2.9.0" "torchvision==0.24.0" --index-url https://download.pytorch.org/whl/cpu
-      - name: Run tests
-        run: |
-          uv run pytest
+    test:
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@v5
+            - name: Install uv
+              uses: astral-sh/setup-uv@v7
+            - name: Set up Python
+              run: uv python install
+            - name: Install the project
+              run: uv sync --locked --all-extras --dev
+            - name: Reinstall Torch for CPU
+              run: |
+                  uv pip uninstall torch torchvision
+                  uv pip install "torch==2.9.0" "torchvision==0.25.0" --index-url https://download.pytorch.org/whl/cpu
+            - name: Run tests
+              run: |
+                  uv run pytest
