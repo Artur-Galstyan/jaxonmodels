@@ -15,10 +15,6 @@ jobs:
               run: uv python install
             - name: Install the project
               run: uv sync --locked --all-extras --dev
-            - name: Reinstall Torch for CPU
-              run: |
-                  uv pip uninstall torch torchvision
-                  uv pip install "torch==2.10.0" "torchvision==0.25.0" --index-url https://download.pytorch.org/whl/cpu
             - name: Run tests
               run: |
                   uv run pytest

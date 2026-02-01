@@ -27,7 +27,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["pre-commit", "pytest", "mkdocs"]
 examples = ["tensorflow-cpu", "tensorflow_datasets", "clu", "requests"]
-tests = ["torch", "torchvision"]
+tests = ["torch==2.10.0", "torchvision==0.25.0"]
 
 [tool.uv.sources]
 torch = { index = "pytorch" }
