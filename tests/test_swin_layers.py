@@ -534,12 +534,31 @@ def test_swinv1():
         (jax_swin, state),
         model_order=model_orders.get_swin_model_order(1),
     )
+
+    # Debug: print first few jaxfields paths to check ordering
+    print("First 5 jaxfield paths:")
+    for i, f in enumerate(jaxfields[:5]):
+        print(f"  {i}: {f.path}")
+    print("First 5 torchfield keys:")
+    for i, f in enumerate(torchfields[:5]):
+        print(f"  {i}: {f.path}")
+
     jax_swin, state = convert(
         weights_dict,
         (jax_swin, state),
         jaxfields,
         state_indices,
         torchfields,
+    )
+
+    # Debug: check if head weights match after conversion
+    jax_head_w = np.array(jax_swin.head.weight)
+    torch_head_w = torch_swin.head.weight.detach().numpy()
+    print(
+        f"After convert - JAX head.weight shape: {jax_head_w.shape}, first 3: {jax_head_w.flatten()[:3]}"
+    )
+    print(
+        f"After convert - Torch head.weight shape: {torch_head_w.shape}, first 3: {torch_head_w.flatten()[:3]}"
     )
 
     jax_swin, state = eqx.nn.inference_mode((jax_swin, state))

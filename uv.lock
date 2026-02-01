@@ -556,7 +556,7 @@ wheels = [
 
 [[package]]
 name = "jaxonlayers"
-version = "0.1.4"
+version = "0.2.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "beartype" },
@@ -564,9 +564,9 @@ dependencies = [
     { name = "jax" },
     { name = "jaxtyping" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/5b/d3/5844db6ac7af8f416698d70ae3feb4fbc41c82bd2422007614c28eefd539/jaxonlayers-0.1.4.tar.gz", hash = "sha256:4268ac410a0caa03a38c2f7aeb2b77a16f5852bb481cc8dcd8d558369e7f2b86", size = 71624, upload-time = "2025-11-23T20:13:42.263Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/5b/1c/b6455974c801ec3a4f8080a685f4d07a9dff89224b6f826057083f7ac54e/jaxonlayers-0.2.1.tar.gz", hash = "sha256:897f6634212b65efe5114da58111082ebec834fda625bbe1cce206293c0ab1d8", size = 74907, upload-time = "2026-01-24T12:02:00.024Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/14/87/eda213044f987a8e4ba21fd229b577522ae4e0005023577888e8d93e7ad0/jaxonlayers-0.1.4-py3-none-any.whl", hash = "sha256:fd00a4e2592d911f384829d59a214941d18c651218c18956a49e1d5d6b92b96e", size = 18195, upload-time = "2025-11-23T20:13:40.816Z" },
+    { url = "https://files.pythonhosted.org/packages/c9/89/8dc883a9d70b19799406a00ecd003ef1bcc5f23e04df547643543d94f711/jaxonlayers-0.2.1-py3-none-any.whl", hash = "sha256:b9f1fd81ca43644430d3dd6db06d061c86f6c25a7a17cf3686ee2a28c57343c4", size = 20925, upload-time = "2026-01-24T12:02:01.488Z" },
 ]
 
 [[package]]
@@ -619,7 +619,7 @@ requires-dist = [
     { name = "ftfy" },
     { name = "jax" },
     { name = "jaxlib" },
-    { name = "jaxonlayers", specifier = ">=0.1.4" },
+    { name = "jaxonlayers", specifier = ">=0.2.1" },
     { name = "jaxtyping" },
     { name = "loguru" },
     { name = "mkdocs", marker = "extra == 'dev'" },
