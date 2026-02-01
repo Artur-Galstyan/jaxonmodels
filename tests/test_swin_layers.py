@@ -551,6 +551,13 @@ def test_swinv1():
 
     t_out = torch_swin.forward(x_t).detach().numpy()
     jax_out = np.array(jax_out)
+
+    # Debug: print comparison info
+    print(f"JAX out shape: {jax_out.shape}, first 5: {jax_out.flatten()[:5]}")
+    print(f"Torch out shape: {t_out.shape}, first 5: {t_out.flatten()[:5]}")
+    print(f"Input x first 5: {x.flatten()[:5]}")
+    print(f"Max diff: {np.max(np.abs(jax_out - t_out))}")
+
     assert np.allclose(jax_out, t_out, atol=1e-3)
 
 
@@ -632,5 +639,11 @@ def test_swinv2():
 
     t_out = torch_swin.forward(x_t).detach().numpy()
     jax_out = np.array(jax_out)
+
+    # Debug: print comparison info
+    print(f"JAX out shape: {jax_out.shape}, first 5: {jax_out.flatten()[:5]}")
+    print(f"Torch out shape: {t_out.shape}, first 5: {t_out.flatten()[:5]}")
+    print(f"Input x first 5: {x.flatten()[:5]}")
+    print(f"Max diff: {np.max(np.abs(jax_out - t_out))}")
 
     assert np.allclose(jax_out, t_out, atol=1e-3)
