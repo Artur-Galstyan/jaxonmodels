@@ -473,7 +473,7 @@ class SwinTransformerBlock(StatefulLayer):
     ) -> tuple[Array, eqx.nn.State]:
         key, subkey = jax.random.split(key)
         x_norm = eqx.filter_vmap(eqx.filter_vmap(self.norm1))(x)
-        attn, state = self.attn(x_norm, state)  # pyright: ignore
+        attn, state = self.attn(x_norm, state)  # pyright: ignore # ty:ignore
         x = x + self.stochastic_depth(attn, key=key)
         x_norm = eqx.filter_vmap(eqx.filter_vmap(self.norm2))(x)
         mlp_o, state = self.mlp(x_norm, state)

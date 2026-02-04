@@ -8,7 +8,6 @@ import pytest
 import torch
 from statedict2pytree import (
     convert,
-    move_running_fields_to_the_end,
     pytree_to_fields,
     state_dict_to_fields,
 )
@@ -74,8 +73,9 @@ def test_cnblock_equivalence_parametrized(  # Renamed function slightly
 
     weights_dict = torch_block.state_dict()
     torchfields = state_dict_to_fields(weights_dict)
-    torchfields = move_running_fields_to_the_end(torchfields)
+    [print(t) for t in torchfields]
     jaxfields, state_indices = pytree_to_fields((jax_block, state))
+    [print(j) for j in jaxfields]
 
     # Use the convert function
     jax_block, state = convert(

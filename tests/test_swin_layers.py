@@ -67,7 +67,6 @@ def test_patch_merging_layers(C, H, W):
 
     weights_dict = torch_patch.state_dict()
     torchfields = state_dict_to_fields(weights_dict)
-    torchfields = move_running_fields_to_the_end(torchfields)
     jaxfields, state_indices = pytree_to_fields((jax_patch, state))
 
     jax_patch, state = convert(
@@ -143,10 +142,9 @@ def test_swin_attention_v1(
 
     weights_dict = torch_swin.state_dict()
     torchfields = state_dict_to_fields(weights_dict)
-    torchfields = move_running_fields_to_the_end(torchfields)
-    torchfields = move_running_fields_to_the_end(
-        torchfields, identifier="relative_position_index"
-    )
+    # torchfields = move_running_fields_to_the_end(
+    #     torchfields, identifier="relative_position_index"
+    # )
     jaxfields, state_indices = pytree_to_fields((jax_swin, state))
 
     # for t, j in zip(torchfields, jaxfields):
@@ -223,13 +221,12 @@ def test_swin_attention_v2(
 
     weights_dict = torch_swin.state_dict()
     torchfields = state_dict_to_fields(weights_dict)
-    torchfields = move_running_fields_to_the_end(torchfields)
-    torchfields = move_running_fields_to_the_end(
-        torchfields, identifier="relative_position_index"
-    )
-    torchfields = move_running_fields_to_the_end(
-        torchfields, identifier="relative_coords_table"
-    )
+    # torchfields = move_running_fields_to_the_end(
+    #     torchfields, identifier="relative_position_index"
+    # )
+    # torchfields = move_running_fields_to_the_end(
+    #     torchfields, identifier="relative_coords_table"
+    # )
 
     jaxfields, state_indices = pytree_to_fields((jax_swin, state))
 
@@ -331,11 +328,10 @@ def test_swin_transformer_block(
     # --- Weight Conversion ---
     weights_dict = torch_block.state_dict()
     torchfields = state_dict_to_fields(weights_dict)
-    torchfields = move_running_fields_to_the_end(torchfields)
-    torchfields = move_running_fields_to_the_end(
-        torchfields,
-        identifier="relative_position_index",
-    )
+    # torchfields = move_running_fields_to_the_end(
+    #     torchfields,
+    #     identifier="relative_position_index",
+    # )
 
     jaxfields, state_indices = pytree_to_fields(
         (
@@ -435,15 +431,14 @@ def test_swin_transformer_blockv2(
     # --- Weight Conversion ---
     weights_dict = torch_block.state_dict()
     torchfields = state_dict_to_fields(weights_dict)
-    torchfields = move_running_fields_to_the_end(torchfields)
-    torchfields = move_running_fields_to_the_end(
-        torchfields,
-        identifier="relative_position_index",
-    )
-    torchfields = move_running_fields_to_the_end(
-        torchfields,
-        identifier="relative_coords_table",
-    )
+    # torchfields = move_running_fields_to_the_end(
+    #     torchfields,
+    #     identifier="relative_position_index",
+    # )
+    # torchfields = move_running_fields_to_the_end(
+    #     torchfields,
+    #     identifier="relative_coords_table",
+    # )
 
     jaxfields, state_indices = pytree_to_fields(
         (

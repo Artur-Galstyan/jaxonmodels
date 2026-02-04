@@ -8,7 +8,12 @@ import jax
 import jax.numpy as jnp
 from beartype.typing import Any, Callable, Literal, Sequence
 from equinox.nn import StatefulLayer
-from jaxonlayers.layers import ConvNormActivation, LayerNorm, StochasticDepth
+from jaxonlayers.layers import (
+    BatchedLinear,
+    ConvNormActivation,
+    LayerNorm,
+    StochasticDepth,
+)
 from jaxonlayers.layers.abstract import AbstractNorm
 from jaxtyping import Array, Float, PRNGKeyArray
 from statedict2pytree import (
@@ -50,11 +55,8 @@ class CNBlockConfig:
 
 
 class CNBlock(eqx.Module):
+    block: eqx.nn.Sequential
     layer_scale: Array
-    dwconv: eqx.nn.Conv2d
-    norm: AbstractNorm
-    pwconv1: eqx.nn.Linear
-    pwconv2: eqx.nn.Linear
     stochastic_depth: StochasticDepth
 
     def __init__(
@@ -69,39 +71,43 @@ class CNBlock(eqx.Module):
     ) -> None:
         key, *keys = jax.random.split(key, 5)
 
+        self.block = eqx.nn.Sequential(
+            layers=[
+                eqx.nn.Conv2d(
+                    in_channels=dim,
+                    out_channels=dim,
+                    kernel_size=7,
+                    padding=3,
+                    groups=dim,
+                    use_bias=True,
+                    key=keys[0],
+                    dtype=dtype,
+                ),
+                eqx.nn.Lambda(fn=lambda x: jnp.transpose(x, (1, 2, 0))),
+                LayerNorm(shape=dim, eps=1e-6)
+                if norm_layer is None
+                else norm_layer(shape=dim, eps=1e-6),
+                BatchedLinear(
+                    in_features=dim,
+                    out_features=4 * dim,
+                    use_bias=True,
+                    key=keys[2],
+                    dtype=dtype,
+                ),
+                eqx.nn.Lambda(fn=lambda x: jax.nn.gelu(x)),
+                BatchedLinear(
+                    in_features=4 * dim,
+                    out_features=dim,
+                    use_bias=True,
+                    key=keys[3],
+                    dtype=dtype,
+                ),
+                eqx.nn.Lambda(fn=lambda x: jnp.transpose(x, (2, 0, 1))),
+            ]
+        )
+
         self.layer_scale = jnp.ones((dim, 1, 1), dtype=dtype) * layer_scale
-        self.dwconv = eqx.nn.Conv2d(
-            in_channels=dim,
-            out_channels=dim,
-            kernel_size=7,
-            padding=3,
-            groups=dim,
-            use_bias=True,
-            key=keys[0],
-            dtype=dtype,
-        )
-        if norm_layer is None:
-            self.norm = LayerNorm(shape=dim, eps=1e-6)
-        else:
-            self.norm = norm_layer(shape=dim, eps=1e-6)
 
-        assert self.norm is not None
-
-        self.pwconv1 = eqx.nn.Linear(
-            in_features=dim,
-            out_features=4 * dim,
-            use_bias=True,
-            key=keys[2],
-            dtype=dtype,
-        )
-
-        self.pwconv2 = eqx.nn.Linear(
-            in_features=4 * dim,
-            out_features=dim,
-            use_bias=True,
-            key=keys[3],
-            dtype=dtype,
-        )
         self.stochastic_depth = StochasticDepth(p=stochastic_depth_prob, mode="row")
 
     def __call__(
@@ -110,13 +116,7 @@ class CNBlock(eqx.Module):
         key: PRNGKeyArray,
     ) -> Float[Array, "c h w"]:
         residual = x
-        x = self.dwconv(x)
-        x = jnp.transpose(x, (1, 2, 0))
-        x = self.norm(x)  # pyright: ignore
-        x = eqx.filter_vmap(eqx.filter_vmap(self.pwconv1))(x)
-        x = jax.nn.gelu(x)
-        x = eqx.filter_vmap(eqx.filter_vmap(self.pwconv2))(x)
-        x = jnp.transpose(x, (2, 0, 1))
+        x = self.block(x)
         x = self.layer_scale * x
         x = self.stochastic_depth(x, key=key)
         x = x + residual
