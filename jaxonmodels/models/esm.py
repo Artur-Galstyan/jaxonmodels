@@ -2,14 +2,124 @@ import math
 
 import equinox as eqx
 import jax
+import jax.numpy as jnp
 from beartype.typing import Any, Literal
-from jaxtyping import PRNGKeyArray
+from jaxtyping import Array, Float, Int, PRNGKeyArray
 
 from jaxonmodels.functions import default_floating_dtype
 
 d_model = 960
 n_heads = 15
 n_layers = 30
+
+
+class ESMMultiHeadAttention(eqx.Module):
+    d_model: int = eqx.field(static=True)
+    n_heads: int = eqx.field(static=True)
+    d_head: int = eqx.field(static=True)
+    qk_layernorm: bool = eqx.field(static=True)
+
+    layernorm_qkv: list
+
+    q_ln: eqx.nn.LayerNorm | None
+    k_ln: eqx.nn.LayerNorm | None
+    rotary: eqx.nn.RotaryPositionalEmbedding
+    out_proj: eqx.nn.Linear
+
+    inference: bool
+
+    def __init__(
+        self,
+        d_model: int,
+        n_heads: int,
+        use_bias: bool = False,
+        qk_layernorm: bool = True,
+        *,
+        key: PRNGKeyArray,
+        dtype: Any | None = None,
+        inference: bool = False,
+    ):
+        if dtype is None:
+            dtype = default_floating_dtype()
+        assert dtype is not None
+        self.inference = inference
+
+        self.d_model = d_model
+        self.n_heads = n_heads
+        self.d_head = d_model // n_heads
+        self.qk_layernorm = qk_layernorm
+
+        key, *subkeys = jax.random.split(key, 3)
+
+        self.layernorm_qkv = [
+            eqx.nn.LayerNorm(d_model),
+            eqx.nn.Linear(
+                d_model, d_model * 3, use_bias=use_bias, key=subkeys[0], dtype=dtype
+            ),
+        ]
+
+        if qk_layernorm:
+            self.q_ln = eqx.nn.LayerNorm(d_model, use_bias=use_bias)
+            self.k_ln = eqx.nn.LayerNorm(d_model, use_bias=use_bias)
+        else:
+            self.q_ln = None
+            self.k_ln = None
+
+        self.rotary = eqx.nn.RotaryPositionalEmbedding(self.d_head)
+        self.out_proj = eqx.nn.Linear(
+            d_model, d_model, use_bias=use_bias, key=subkeys[1], dtype=dtype
+        )
+
+    def __call__(
+        self,
+        x: Float[Array, "seq_len d_model"],
+        seq_id: Int[Array, "seq_len"] | None = None,
+        *,
+        key: PRNGKeyArray | None = None,
+    ) -> Float[Array, "seq_len d_model"]:
+        seq_len = x.shape[0]
+        dtype = x.dtype
+
+        for l in self.layernorm_qkv:
+            x = eqx.filter_vmap(l)(x)
+        qkv = x
+        q, k, v = jnp.split(qkv, 3, axis=-1)
+
+        if self.q_ln is not None:
+            q = eqx.filter_vmap(self.q_ln)(q).astype(dtype)
+        if self.k_ln is not None:
+            k = eqx.filter_vmap(self.k_ln)(k).astype(dtype)
+
+        q = q.reshape(seq_len, self.n_heads, self.d_head)
+        k = k.reshape(seq_len, self.n_heads, self.d_head)
+
+        q = eqx.filter_vmap(self.rotary, in_axes=1, out_axes=1)(q)
+        k = eqx.filter_vmap(self.rotary, in_axes=1, out_axes=1)(k)
+
+        q = jnp.transpose(q, (1, 0, 2))
+        k = jnp.transpose(k, (1, 0, 2))
+        v = v.reshape(seq_len, self.n_heads, self.d_head)
+        v = jnp.transpose(v, (1, 0, 2))
+
+        scale = 1.0 / jnp.sqrt(jnp.array(self.d_head, dtype=dtype))
+        attn_weights = jnp.einsum("hsd,htd->hst", q, k) * scale
+
+        if seq_id is not None:
+            mask = seq_id[:, None] == seq_id[None, :]
+            attn_weights = jnp.where(
+                mask[None, :, :], attn_weights, jnp.finfo(dtype).min
+            )
+
+        attn_weights = jax.nn.softmax(attn_weights, axis=-1)
+
+        context = jnp.einsum("hst,htd->hsd", attn_weights, v)
+
+        context = jnp.transpose(context, (1, 0, 2))
+        context = context.reshape(seq_len, self.d_model)
+
+        output = eqx.filter_vmap(self.out_proj)(context)
+
+        return output
 
 
 def RegressionHead(
@@ -45,6 +155,30 @@ def RegressionHead(
 
 
 class UnifiedTransformerBlock(eqx.Module):
+    """
+    A unified transformer block that can optionally incorporate geometric attention.
+
+    This class defines a transformer block that can be configured to use
+    geometric attention alongside the standard multi-head attention mechanism.
+    It is designed to be a flexible component of transformer-based models, allowing for
+    the integration of geometric reasoning.
+
+    Parameters
+    ----------
+    d_model : int
+        The dimensionality of the input and output features of the transformer block.
+    n_heads : int
+        The number of attention heads in the multi-head attention mechanism.
+    n_layers : int
+        The number of layers in the transformer block.
+    use_geom_attn : bool, optional
+        Whether to use geometric attention in addition to
+        the standard multi-head attention. Defaults to False.
+    v_heads : int, optional
+        The number of heads to use for the geometric attention mechanism, if enabled.
+        Must be specified if `use_geom_attn` is True.
+    """
+
     inference: bool
 
     def __init__(
