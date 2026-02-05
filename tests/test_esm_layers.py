@@ -12,10 +12,7 @@ from jaxonmodels.models.esm import ESMMultiHeadAttention
 
 @pytest.mark.parametrize(
     "d_model, n_heads, seq_len, bias, qk_layernorm",
-    [
-        (96, 4, 7, True, True),
-        (960, 15, 7, False, True),
-    ],
+    [(96, 4, 7, True, True), (960, 15, 7, False, True), (1152, 18, 7, False, True)],
 )
 def test_mha_implementations(
     d_model: int, n_heads: int, seq_len, bias: bool, qk_layernorm: bool

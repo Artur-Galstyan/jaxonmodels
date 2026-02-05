@@ -4,13 +4,83 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 from beartype.typing import Any, Literal
+from jaxonlayers.functions.activation import swiglu
 from jaxtyping import Array, Float, Int, PRNGKeyArray
 
 from jaxonmodels.functions import default_floating_dtype
 
-d_model = 960
-n_heads = 15
-n_layers = 30
+
+class Affine3D:
+    pass
+
+
+def swiglu_correction_fn(expansion_ratio: float, d_model: int) -> int:
+    # set hidden dimesion to nearest multiple of 256 after expansion ratio
+    return int(((expansion_ratio * d_model) + 255) // 256 * 256)
+
+
+def swiglu_ln_ffn(
+    d_model: int,
+    expansion_ratio: float,
+    bias: bool,
+    *,
+    key: PRNGKeyArray,
+    dtype: Any | None,
+):
+    key1, key2 = jax.random.split(key)
+    return [
+        eqx.nn.LayerNorm(d_model),
+        eqx.nn.Linear(
+            d_model,
+            swiglu_correction_fn(expansion_ratio, d_model) * 2,
+            use_bias=bias,
+            key=key1,
+            dtype=dtype,
+        ),
+        eqx.nn.Lambda(fn=swiglu),
+        eqx.nn.Linear(
+            swiglu_correction_fn(expansion_ratio, d_model),
+            d_model,
+            use_bias=bias,
+            key=key2,
+            dtype=dtype,
+        ),
+    ]
+
+
+def gelu_ln_ffn(
+    d_model: int,
+    expansion_ratio: float,
+    bias: bool,
+    *,
+    key: PRNGKeyArray,
+    dtype: Any | None,
+):
+    hidden_dim = int(expansion_ratio * d_model)
+    key1, key2 = jax.random.split(key)
+    return [
+        eqx.nn.LayerNorm(d_model),
+        eqx.nn.Linear(d_model, hidden_dim, use_bias=bias, key=key1, dtype=dtype),
+        eqx.nn.Lambda(fn=jax.nn.gelu),
+        eqx.nn.Linear(hidden_dim, d_model, use_bias=bias, key=key2, dtype=dtype),
+    ]
+
+
+class GeometricReasoningOriginalImpl(eqx.Module):
+    def __init__(
+        self,
+        c_s: int,
+        v_heads: int,
+        num_vector_messages: int = 1,
+        mask_and_zero_frameless: bool = True,
+        divide_residual_by_depth: bool = False,
+        bias: bool = False,
+        *,
+        key: PRNGKeyArray,
+        dtype: Any | None = None,
+        inference: bool = False,
+    ):
+        pass
 
 
 class ESMMultiHeadAttention(eqx.Module):
@@ -92,29 +162,16 @@ class ESMMultiHeadAttention(eqx.Module):
 
         q = q.reshape(seq_len, self.n_heads, self.d_head)
         k = k.reshape(seq_len, self.n_heads, self.d_head)
+        v = v.reshape(seq_len, self.n_heads, self.d_head)
 
         q = eqx.filter_vmap(self.rotary, in_axes=1, out_axes=1)(q)
         k = eqx.filter_vmap(self.rotary, in_axes=1, out_axes=1)(k)
 
-        q = jnp.transpose(q, (1, 0, 2))
-        k = jnp.transpose(k, (1, 0, 2))
-        v = v.reshape(seq_len, self.n_heads, self.d_head)
-        v = jnp.transpose(v, (1, 0, 2))
-
-        scale = 1.0 / jnp.sqrt(jnp.array(self.d_head, dtype=dtype))
-        attn_weights = jnp.einsum("hsd,htd->hst", q, k) * scale
-
+        mask = None
         if seq_id is not None:
             mask = seq_id[:, None] == seq_id[None, :]
-            attn_weights = jnp.where(
-                mask[None, :, :], attn_weights, jnp.finfo(dtype).min
-            )
-
-        attn_weights = jax.nn.softmax(attn_weights, axis=-1)
-
-        context = jnp.einsum("hst,htd->hsd", attn_weights, v)
-
-        context = jnp.transpose(context, (1, 0, 2))
+            mask = jnp.expand_dims(mask, axis=0)
+        context = jax.nn.dot_product_attention(q, k, v, mask=mask)
         context = context.reshape(seq_len, self.d_model)
 
         output = eqx.filter_vmap(self.out_proj)(context)
@@ -179,6 +236,14 @@ class UnifiedTransformerBlock(eqx.Module):
         Must be specified if `use_geom_attn` is True.
     """
 
+    attn: ESMMultiHeadAttention
+    geom_attn: GeometricReasoningOriginalImpl
+    ffn: list
+
+    use_plain_attn: bool = eqx.field(static=True)
+    use_geom_attn: bool = eqx.field(static=True)
+    residue_scaling_factor: float = eqx.field(static=True)
+
     inference: bool
 
     def __init__(
@@ -204,6 +269,64 @@ class UnifiedTransformerBlock(eqx.Module):
             dtype = default_floating_dtype()
         assert dtype is not None
         self.inference = inference
+        self.use_plain_attn = use_plain_attn
+        self.use_geom_attn = use_geom_attn
+        key, mha_key = jax.random.split(key)
+        if self.use_plain_attn:
+            self.attn = ESMMultiHeadAttention(
+                d_model,
+                n_heads,
+                bias,
+                qk_layernorm=qk_layernorm,
+                key=key,
+                inference=inference,
+                dtype=dtype,
+            )
+
+        if self.use_geom_attn:
+            if v_heads is None:
+                raise ValueError("v_heads must be specified when use_geom_attn is True")
+            key, geom_key = jax.random.split(key)
+            self.geom_attn = GeometricReasoningOriginalImpl(
+                c_s=d_model,
+                v_heads=v_heads,
+                bias=bias,
+                mask_and_zero_frameless=mask_and_zero_frameless,
+                key=geom_key,
+                dtype=dtype,
+                inference=inference,
+            )
+        key, ffn_key = jax.random.split(key)
+        if ffn_type == "swiglu":
+            self.ffn = swiglu_ln_ffn(
+                d_model,
+                expansion_ratio,
+                bias,
+                key=key,
+                dtype=dtype,
+            )
+        elif ffn_type == "gelu":
+            self.ffn = gelu_ln_ffn(
+                d_model,
+                expansion_ratio,
+                bias,
+                key=key,
+                dtype=dtype,
+            )
+        else:
+            raise ValueError(f"Unknown ffn_type: {ffn_type}")
+
+        self.scaling_factor = residue_scaling_factor
+
+    def __call__(
+        self,
+        x: Array,
+        sequence_id: Array,
+        frames: Affine3D,
+        frames_mask: Array,
+        chain_id: Array,
+    ) -> Array:
+        return x
 
 
 class TransformerStack(eqx.Module):
@@ -229,6 +352,7 @@ class TransformerStack(eqx.Module):
     """
 
     blocks: list[UnifiedTransformerBlock]
+    norm: eqx.nn.LayerNorm
 
     def __init__(
         self,
@@ -272,6 +396,7 @@ class TransformerStack(eqx.Module):
             )
             for i in range(n_layers)
         ]
+        self.norm = eqx.nn.LayerNorm(d_model, use_bias=bias, dtype=dtype)
 
 
 class ESMC(eqx.Module):
