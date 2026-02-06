@@ -1,17 +1,487 @@
 import math
+from abc import ABC
+from dataclasses import dataclass
 
 import equinox as eqx
 import jax
 import jax.numpy as jnp
-from beartype.typing import Any, Literal
+from beartype.typing import Any, Literal, Self, Type, Union
 from jaxonlayers.functions.activation import swiglu
+from jaxonlayers.functions.normalization import normalize
 from jaxtyping import Array, Float, Int, PRNGKeyArray
 
 from jaxonmodels.functions import default_floating_dtype
 
 
+def _graham_schmidt(x_axis: Array, xy_plane: Array, eps: float = 1e-12):
+    e1 = xy_plane
+    denom = jnp.sqrt((x_axis**2).sum(axis=-1, keepdims=True) + eps)
+    x_axis = x_axis / denom
+    dot = (x_axis * e1).sum(axis=-1, keepdims=True)
+    e1 = e1 - x_axis * dot
+    denom = jnp.sqrt((e1**2).sum(axis=-1, keepdims=True) + eps)
+    e1 = e1 / denom
+    e2 = jnp.cross(x_axis, e1, axis=-1)
+    rots = jnp.stack([x_axis, e1, e2], axis=-1)
+    return rots
+
+
+def _sqrt_subgradient(x: Array) -> Array:
+    return jnp.where(x > 0, jnp.sqrt(x), 0.0)
+
+
+def _quat_invert(q: Array):
+    return q * jnp.array([1, -1, -1, -1])
+
+
+def _quat_rotation(q: Float[Array, "w x y z"], p: Float[Array, "x y z"]) -> Array:
+    """
+    Rotates p by quaternion q.
+
+    Args:
+        q: Quaternions as tensor of shape (..., 4), real part first.
+        p: Points as tensor of shape (..., 3)
+
+    Returns:
+        The rotated version of p, of shape (..., 3)
+    """
+    aw, ax, ay, az = q[..., 0], q[..., 1], q[..., 2], q[..., 3]
+    bx, by, bz = p[..., 0], p[..., 1], p[..., 2]
+    # fmt: off
+    ow =         - ax * bx - ay * by - az * bz
+    ox = aw * bx           + ay * bz - az * by
+    oy = aw * by - ax * bz           + az * bx
+    oz = aw * bz + ax * by - ay * bx
+    # fmt: on
+    q_mul_pts = jnp.stack((ow, ox, oy, oz), -1)
+    return _quat_mult(q_mul_pts, _quat_invert(q))[..., 1:]
+
+
+def _quat_mult(
+    a: Float[Array, "w x y z"], b: Float[Array, "w x y z"]
+) -> Float[Array, "w x y z"]:
+    """
+    Multiply two quaternions.
+    Usual torch rules for broadcasting apply.
+
+    Args:
+        a: Quaternions as tensor of shape (..., 4), real part first.
+        b: Quaternions as tensor of shape (..., 4), real part first.
+
+    Returns:
+        The product of a and b, a tensor of quaternions shape (..., 4).
+    """
+    aw, ax, ay, az = a[..., 0], a[..., 1], a[..., 2], a[..., 3]
+    bw, bx, by, bz = b[..., 0], b[..., 1], b[..., 2], b[..., 3]
+    ow = aw * bw - ax * bx - ay * by - az * bz
+    ox = aw * bx + ax * bw + ay * bz - az * by
+    oy = aw * by - ax * bz + ay * bw + az * bx
+    oz = aw * bz + ax * by - ay * bx + az * bw
+    return jnp.stack((ow, ox, oy, oz), -1)
+
+
+class Rotation(ABC):
+    @classmethod
+    def identity(cls, shape: tuple[int, ...], **tensor_kwargs) -> Self:
+        raise NotImplementedError
+
+    @classmethod
+    def random(cls, shape: tuple[int, ...], key: PRNGKeyArray, **tensor_kwargs) -> Self:
+        raise NotImplementedError
+
+    def __getitem__(self, idx: Any) -> Self:
+        raise NotImplementedError
+
+    @property
+    def tensor(self) -> Array:
+        raise NotImplementedError
+
+    @property
+    def shape(self) -> tuple:
+        raise NotImplementedError
+
+    def as_matrix(self) -> "RotationMatrix":
+        raise NotImplementedError
+
+    def as_quat(self, normalize: bool = False) -> "RotationQuat":
+        raise NotImplementedError
+
+    def compose(self, other: "Rotation") -> "Rotation":
+        raise NotImplementedError
+
+    def convert_compose(self, other: Self) -> Self:
+        raise NotImplementedError
+
+    def apply(self, p: Array) -> Array:
+        raise NotImplementedError
+
+    def invert(self) -> Self:
+        raise NotImplementedError
+
+    @property
+    def dtype(self) -> jnp.dtype:
+        return self.tensor.dtype
+
+    @property
+    def device(self) -> jax.Device:
+        return self.tensor.device
+
+    def tensor_apply(self, func) -> Self:
+        # Applys a function to the underlying tensor
+        return type(self)(
+            jnp.stack(
+                [func(self.tensor[..., i]) for i in range(self.tensor.shape[-1])],
+                axis=-1,
+            )  # ty: ignore too-many-positional-arguments
+        )
+
+
+class RotationQuat(Rotation):
+    def __init__(self, quats: Array, normalized=False):
+        assert quats.shape[-1] == 4
+        self._normalized = normalized
+        # Force float32 as well
+        if normalized:
+            self._quats = normalize(quats.astype(jnp.float32), axis=-1)
+            self._quats = jnp.where(
+                self._quats[..., :1] >= 0, self._quats, -self._quats
+            )
+        else:
+            self._quats = quats.astype(jnp.float32)
+
+    @classmethod
+    def identity(cls, shape, **tensor_kwargs):
+        q = jnp.ones((*shape, 4), **tensor_kwargs)
+        mult = jnp.array([1, 0, 0, 0])
+        return RotationQuat(q * mult)
+
+    @classmethod
+    def random(cls, shape, key: PRNGKeyArray, **tensor_kwargs):
+        quat = jax.random.normal(key=key, shape=(*shape, 4), **tensor_kwargs)
+        return RotationQuat(quat, normalized=True)
+
+    def __getitem__(self, idx: Any) -> "RotationQuat":
+        if isinstance(idx, (int, slice)) or idx is None:
+            indices = (idx,)
+        else:
+            indices = tuple(idx)
+        return RotationQuat(self._quats[indices + (slice(None),)])
+
+    @property
+    def shape(self) -> tuple:
+        return self._quats.shape[:-1]
+
+    def compose(self, other: Rotation) -> Rotation:
+        assert isinstance(other, RotationQuat)
+        return RotationQuat(_quat_mult(self._quats, other._quats))
+
+    def convert_compose(self, other: Rotation):
+        return self.compose(other.as_quat())
+
+    def as_matrix(self) -> "RotationMatrix":
+        q = self.normalized().tensor
+        r, i, j, k = q[..., 0], q[..., 1], q[..., 2], q[..., 3]
+        two_s = 2.0 / jnp.linalg.norm(q, axis=-1)
+
+        o = jnp.stack(
+            (
+                1 - two_s * (j * j + k * k),
+                two_s * (i * j - k * r),
+                two_s * (i * k + j * r),
+                two_s * (i * j + k * r),
+                1 - two_s * (i * i + k * k),
+                two_s * (j * k - i * r),
+                two_s * (i * k - j * r),
+                two_s * (j * k + i * r),
+                1 - two_s * (i * i + j * j),
+            ),
+            -1,
+        )
+        return RotationMatrix(o.reshape(q.shape[:-1] + (3, 3)))
+
+    def as_quat(self, normalize: bool = False) -> "RotationQuat":
+        return self
+
+    def apply(self, p: Array) -> Array:
+        return _quat_rotation(self.normalized()._quats, p)
+
+    def invert(self) -> "RotationQuat":
+        return RotationQuat(_quat_invert(self._quats))
+
+    @property
+    def tensor(self) -> Array:
+        return self._quats
+
+    def normalized(self) -> "RotationQuat":
+        return self if self._normalized else RotationQuat(self._quats, normalized=True)
+
+
+class RotationMatrix(Rotation):
+    def __init__(self, rots: Array):
+        if rots.shape[-1] == 9:
+            rots = rots.reshape(*rots.shape[:-1], 3, 3)
+        assert rots.shape[-1] == 3
+        assert rots.shape[-2] == 3
+        # Force full precision
+        rots = rots.astype(jnp.float32)
+        self._rots = rots
+
+    @classmethod
+    def identity(cls, shape, **tensor_kwargs):
+        rots = jnp.eye(3, **tensor_kwargs)
+        rots = rots.reshape(*[1 for _ in range(len(shape))], 3, 3)
+        rots = jnp.broadcast_to(rots, (*shape, rots.shape[-2], rots.shape[-1]))
+        return cls(rots)
+
+    @classmethod
+    def random(cls, shape, key: PRNGKeyArray, **tensor_kwargs):
+        return RotationQuat.random(shape, **tensor_kwargs).as_matrix()
+
+    def __getitem__(self, idx: Any) -> "RotationMatrix":
+        indices = (idx,) if isinstance(idx, int) or idx is None else tuple(idx)
+        return RotationMatrix(self._rots[indices + (slice(None), slice(None))])
+
+    @property
+    def shape(self) -> tuple:
+        return self._rots.shape[:-2]
+
+    def as_matrix(self) -> "RotationMatrix":
+        return self
+
+    def as_quat(self, normalize: bool = False) -> RotationQuat:
+        flat = self._rots.reshape(*self._rots.shape[:-2], 9)
+        m00, m01, m02, m10, m11, m12, m20, m21, m22 = [flat[..., i] for i in range(9)]
+        q_abs = _sqrt_subgradient(
+            jnp.stack(
+                [
+                    1.0 + m00 + m11 + m22,
+                    1.0 + m00 - m11 - m22,
+                    1.0 - m00 + m11 - m22,
+                    1.0 - m00 - m11 + m22,
+                ],
+                axis=-1,
+            )
+        )
+        # we produce the desired quaternion multiplied by each of r, i, j, k
+        quat_by_rijk = jnp.stack(
+            [
+                x
+                for lst in [
+                    [q_abs[..., 0] ** 2, m21 - m12, m02 - m20, m10 - m01],
+                    [m21 - m12, q_abs[..., 1] ** 2, m10 + m01, m02 + m20],
+                    [m02 - m20, m10 + m01, q_abs[..., 2] ** 2, m12 + m21],
+                    [m10 - m01, m20 + m02, m21 + m12, q_abs[..., 3] ** 2],
+                ]
+                for x in lst
+            ],
+            axis=-1,
+        )
+        quat_by_rijk = quat_by_rijk.reshape(*quat_by_rijk.shape[:-1], 4, 4)
+
+        # We floor here at 0.1 but the exact level is not important; if q_abs is small,
+        # the candidate won't be picked.
+        flr = jnp.array(0.1, dtype=q_abs.dtype)
+        quat_candidates = quat_by_rijk / (2.0 * jnp.maximum(q_abs[..., None], flr))
+
+        one_hot = jax.nn.one_hot(q_abs.argmax(axis=-1), num_classes=q_abs.shape[-1])
+        quat = (quat_candidates * one_hot[..., :, None]).sum(axis=-2)
+
+        return RotationQuat(quat)
+
+    def compose(self, other: Rotation) -> Rotation:
+        assert isinstance(other, RotationMatrix)
+        return RotationMatrix(self._rots @ other._rots)
+
+    def convert_compose(self, other: Rotation):
+        return self.compose(other.as_matrix())
+
+    def apply(self, p: Array) -> Array:
+        if self._rots.shape[-3] == 1:
+            # This is a slight speedup over einsum for batched rotations
+            return p @ jnp.swapaxes(self._rots, -1, -2).squeeze(-3)
+        else:
+            # einsum way faster than bmm!
+            return jnp.einsum("...ij,...j", self._rots, p)
+
+    def invert(self) -> "RotationMatrix":
+        return RotationMatrix(jnp.swapaxes(self._rots, -1, -2))
+
+    @property
+    def tensor(self) -> Array:
+        return self._rots.reshape(*self._rots.shape[:-2], -1)
+
+    def to_3x3(self) -> Array:
+        return self._rots
+
+    @staticmethod
+    def from_graham_schmidt(
+        x_axis: Array, xy_plane: Array, eps: float = 1e-12
+    ) -> "RotationMatrix":
+        return RotationMatrix(_graham_schmidt(x_axis, xy_plane, eps))
+
+
+@dataclass(frozen=True)
 class Affine3D:
-    pass
+    trans: Array
+    rot: Rotation
+
+    def __post_init__(self):
+        assert self.trans.shape[:-1] == self.rot.shape
+
+    @staticmethod
+    def identity(
+        shape_or_affine: Union[tuple[int, ...], "Affine3D"],
+        rotation_type: Type[Rotation] = RotationMatrix,
+        **tensor_kwargs,
+    ):
+        if isinstance(shape_or_affine, Affine3D):
+            shape = shape_or_affine.shape
+            rotation_type = type(shape_or_affine.rot)
+            dtype = shape_or_affine.dtype
+        else:
+            shape = shape_or_affine
+            dtype = tensor_kwargs.get("dtype", None)
+
+        return Affine3D(
+            jnp.zeros((*shape, 3), dtype=dtype),
+            rotation_type.identity(shape, dtype=dtype),
+        )
+
+    @staticmethod
+    def random(
+        key: PRNGKeyArray,
+        shape: tuple[int, ...],
+        std: float = 1,
+        rotation_type: Type[Rotation] = RotationMatrix,
+        **tensor_kwargs,
+    ) -> "Affine3D":
+        return Affine3D(
+            trans=jax.random.normal(key=key, shape=(*shape, 3), **tensor_kwargs) * std,
+            rot=rotation_type.random(shape, **tensor_kwargs),
+        )
+
+    def __getitem__(self, idx: Any) -> "Affine3D":
+        indices = (idx,) if isinstance(idx, int) or idx is None else tuple(idx)
+        return Affine3D(trans=self.trans[indices + (slice(None),)], rot=self.rot[idx])
+
+    @property
+    def shape(self) -> tuple:
+        return self.trans.shape[:-1]
+
+    @property
+    def dtype(self) -> jnp.dtype:
+        return self.trans.dtype
+
+    @property
+    def device(self) -> jax.Device:
+        return self.trans.device
+
+    def tensor_apply(self, func) -> "Affine3D":
+        # Applys a function to the underlying tensor
+        return self.from_tensor(
+            jnp.stack(
+                [func(self.tensor[..., i]) for i in range(self.tensor.shape[-1])],
+                axis=-1,
+            )
+        )
+
+    def as_matrix(self):
+        return Affine3D(trans=self.trans, rot=self.rot.as_matrix())
+
+    def as_quat(self, normalize: bool = False):
+        return Affine3D(trans=self.trans, rot=self.rot.as_quat(normalize))
+
+    def compose(self, other: "Affine3D", autoconvert: bool = False):
+        rot = self.rot
+        new_rot = (rot.convert_compose if autoconvert else rot.compose)(other.rot)
+        new_trans = rot.apply(other.trans) + self.trans
+        return Affine3D(trans=new_trans, rot=new_rot)
+
+    def compose_rotation(self, other: Rotation, autoconvert: bool = False):
+        return Affine3D(
+            trans=self.trans,
+            rot=(self.rot.convert_compose if autoconvert else self.rot.compose)(other),
+        )
+
+    def scale(self, v: Array | float):
+        return Affine3D(self.trans * v, self.rot)
+
+    def mask(self, mask: Array, with_zero=False):
+        # Returns a transform where True positions in mask is identity
+        if with_zero:
+            tensor = self.tensor
+            return Affine3D.from_tensor(
+                jnp.where(mask[..., None], jnp.zeros_like(tensor), tensor)
+            )
+        else:
+            identity = self.identity(
+                self.shape,
+                rotation_type=type(self.rot),
+                dtype=self.dtype,
+            ).tensor
+            return Affine3D.from_tensor(
+                jnp.where(mask[..., None], identity, self.tensor)
+            )
+
+    def apply(self, p: Array) -> Array:
+        return self.rot.apply(p) + self.trans
+
+    def invert(self):
+        inv_rot = self.rot.invert()
+        return Affine3D(trans=-inv_rot.apply(self.trans), rot=inv_rot)
+
+    @property
+    def tensor(self) -> Array:
+        return jnp.concat([self.rot.tensor, self.trans], axis=-1)
+
+    @staticmethod
+    def from_tensor(t: Array) -> "Affine3D":
+        match t.shape[-1]:
+            case 4:
+                # Assume tensor 4x4 for backward compat with alphafold
+                trans = t[..., :3, 3]
+                rot = RotationMatrix(t[..., :3, :3])
+            case 6:
+                trans = t[..., -3:]
+                x = t[..., :3]
+                padded = jnp.concatenate([jnp.ones((*x.shape[:-1], 1)), x], axis=-1)
+                rot = RotationQuat(padded)
+            case 7:
+                trans = t[..., -3:]
+                rot = RotationQuat(t[..., :4])
+            case 12:
+                trans = t[..., -3:]
+                rot = RotationMatrix(t[..., :-3].reshape(*t.shape[:-1], 3, 3))
+            case _:
+                raise RuntimeError(
+                    "Cannot detect rotation fromat "
+                    f"from {t.shape[-1] - 3}-d flat vector"
+                )
+        return Affine3D(trans, rot)
+
+    @staticmethod
+    def from_tensor_pair(t: Array, r: Array) -> "Affine3D":
+        return Affine3D(t, RotationMatrix(r))
+
+    @staticmethod
+    def from_graham_schmidt(
+        neg_x_axis: Array,
+        origin: Array,
+        xy_plane: Array,
+        eps: float = 1e-10,
+    ):
+        # The arguments of this function is for parity with AlphaFold
+        x_axis = origin - neg_x_axis
+        xy_plane = xy_plane - origin
+        return Affine3D(
+            trans=origin, rot=RotationMatrix.from_graham_schmidt(x_axis, xy_plane, eps)
+        )
+
+    @staticmethod
+    def cat(affines: list["Affine3D"], dim: int = 0):
+        if dim < 0:
+            dim = len(affines[0].shape) + dim
+        return Affine3D.from_tensor(jnp.concat([x.tensor for x in affines], axis=dim))
 
 
 def swiglu_correction_fn(expansion_ratio: float, d_model: int) -> int:
