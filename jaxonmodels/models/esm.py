@@ -1,16 +1,49 @@
+import functools
 import math
 from abc import ABC
-from dataclasses import dataclass
 
 import equinox as eqx
 import jax
 import jax.numpy as jnp
-from beartype.typing import Any, Literal, Self, Type, Union
+from beartype.typing import (
+    Any,
+    Literal,
+    Self,
+    Type,
+    Union,
+)
 from jaxonlayers.functions.activation import swiglu
 from jaxonlayers.functions.normalization import normalize
+from jaxonlayers.layers.embedding import EmbeddingBag, EmbeddingWithPadding
 from jaxtyping import Array, Float, Int, PRNGKeyArray
 
 from jaxonmodels.functions import default_floating_dtype
+
+ESM3_OPEN_SMALL = "esm3_sm_open_v1"
+ESM3_OPEN_SMALL_ALIAS_1 = "esm3-open-2024-03"
+ESM3_OPEN_SMALL_ALIAS_2 = "esm3-sm-open-v1"
+ESM3_OPEN_SMALL_ALIAS_3 = "esm3-open"
+ESM3_STRUCTURE_ENCODER_V0 = "esm3_structure_encoder_v0"
+ESM3_STRUCTURE_DECODER_V0 = "esm3_structure_decoder_v0"
+ESM3_FUNCTION_DECODER_V0 = "esm3_function_decoder_v0"
+ESMC_600M = "esmc_600m"
+ESMC_300M = "esmc_300m"
+
+
+SEQUENCE_MASK_TOKEN = 32
+SEQUENCE_BOS_TOKEN = 0
+SEQUENCE_PAD_TOKEN = 1
+SEQUENCE_EOS_TOKEN = 2
+SEQUENCE_CHAINBREAK_TOKEN = 31
+STRUCTURE_MASK_TOKEN = 4096
+STRUCTURE_PAD_TOKEN = 4099
+STRUCTURE_BOS_TOKEN = 4098
+STRUCTURE_EOS_TOKEN = 4097
+STRUCTURE_CHAINBREAK_TOKEN = 4100
+SS8_PAD_TOKEN = 0
+SASA_PAD_TOKEN = 0
+RESIDUE_PAD_TOKEN = 0
+INTERPRO_PAD_TOKEN = 0
 
 
 def _graham_schmidt(x_axis: Array, xy_plane: Array, eps: float = 1e-12):
@@ -559,7 +592,6 @@ class GeometricReasoningOriginalImpl(eqx.Module):
         v_heads: int,
         num_vector_messages: int = 1,
         mask_and_zero_frameless: bool = True,
-        divide_residual_by_depth: bool = False,
         bias: bool = False,
         *,
         key: PRNGKeyArray,
@@ -673,7 +705,7 @@ class GeometricReasoningOriginalImpl(eqx.Module):
             attn_bias = attn_bias[:, _s_q:, _s_k:]
             attn_weight = attn_weight + attn_bias
 
-        attn_weight = jax.nn.softmax(attn_weight, axis=-1)
+        attn_weight = jnp.nan_to_num(jax.nn.softmax(attn_weight, axis=-1), nan=0.0)
 
         attn_out = attn_weight @ value
 
@@ -797,29 +829,18 @@ def RegressionHead(
     *,
     key: PRNGKeyArray,
     dtype: Any | None = None,
-) -> eqx.nn.Sequential:
-    """Single-hidden layer MLP for supervised output.
-
-    Args:
-        d_model: input dimension
-        output_dim: dimensionality of the output.
-        hidden_dim: optional dimension of hidden layer, defaults to d_model.
-    Returns:
-        output MLP module.
-    """
+) -> list:
     if dtype is None:
         dtype = default_floating_dtype()
     assert dtype is not None
     hidden_dim = hidden_dim if hidden_dim is not None else d_model
     key, subkey = jax.random.split(key)
-    return eqx.nn.Sequential(
-        [
-            eqx.nn.Linear(d_model, hidden_dim, key=key),
-            eqx.nn.Lambda(fn=jax.nn.gelu),
-            eqx.nn.LayerNorm(hidden_dim),
-            eqx.nn.Linear(hidden_dim, output_dim, key=subkey),
-        ]
-    )
+    return [
+        eqx.nn.Linear(d_model, hidden_dim, key=key),
+        eqx.nn.Lambda(fn=jax.nn.gelu),
+        eqx.nn.LayerNorm(hidden_dim),
+        eqx.nn.Linear(hidden_dim, output_dim, key=subkey),
+    ]
 
 
 class UnifiedTransformerBlock(eqx.Module):
@@ -864,7 +885,6 @@ class UnifiedTransformerBlock(eqx.Module):
         n_heads: int,
         use_geom_attn: bool = False,
         use_plain_attn: bool = True,
-        use_flash_attn: bool = False,
         v_heads: int | None = None,
         bias: bool = False,
         expansion_ratio: float = 4.0,
@@ -890,7 +910,7 @@ class UnifiedTransformerBlock(eqx.Module):
                 n_heads,
                 bias,
                 qk_layernorm=qk_layernorm,
-                key=key,
+                key=mha_key,
                 inference=inference,
                 dtype=dtype,
             )
@@ -918,7 +938,7 @@ class UnifiedTransformerBlock(eqx.Module):
                 d_model,
                 expansion_ratio,
                 bias,
-                key=key,
+                key=ffn_key,
                 dtype=dtype,
             )
         elif ffn_type == "gelu":
@@ -926,7 +946,7 @@ class UnifiedTransformerBlock(eqx.Module):
                 d_model,
                 expansion_ratio,
                 bias,
-                key=key,
+                key=ffn_key,
                 dtype=dtype,
             )
         else:
@@ -940,7 +960,7 @@ class UnifiedTransformerBlock(eqx.Module):
         sequence_id: Array | None,
         frames: Affine3D | None,
         frames_mask: Array | None,
-        chain_id: Array,
+        chain_id: Array | None,
     ) -> Array:
         if self.use_plain_attn:
             assert self.attn is not None
@@ -951,6 +971,7 @@ class UnifiedTransformerBlock(eqx.Module):
             assert frames is not None
             assert frames_mask is not None
             assert self.geom_attn is not None
+            assert chain_id is not None
             r2 = self.geom_attn(x, frames, frames_mask, sequence_id, chain_id)
             x = x + r2 / self.scaling_factor
 
@@ -1030,7 +1051,23 @@ class TransformerStack(eqx.Module):
             )
             for i in range(n_layers)
         ]
-        self.norm = eqx.nn.LayerNorm(d_model, use_bias=bias, dtype=dtype)
+        self.norm = eqx.nn.LayerNorm(d_model, use_bias=False, dtype=dtype)
+
+    def __call__(
+        self,
+        x: Array,
+        sequence_id: Array | None = None,
+        frames: Affine3D | None = None,
+        frames_mask: Array | None = None,
+        chain_id: Array | None = None,
+    ) -> tuple[Array, Array, list[Array]]:
+        hiddens = []
+        for block in self.blocks:
+            x = block(x, sequence_id, frames, frames_mask, chain_id)
+            hiddens.append(x)
+        embedding = x
+        x = eqx.filter_vmap(self.norm)(x)
+        return x, embedding, hiddens
 
 
 class ESMC(eqx.Module):
@@ -1045,7 +1082,7 @@ class ESMC(eqx.Module):
 
     embed: eqx.nn.Embedding
     transformer: TransformerStack
-    sequence_head: eqx.nn.Sequential
+    sequence_head: list
 
     inference: bool
 
@@ -1054,8 +1091,7 @@ class ESMC(eqx.Module):
         d_model: int,
         n_heads: int,
         n_layers: int,
-        # tokenizer: EsmSequenceTokenizer,
-        # use_flash_attn: bool = True,
+        *,
         key: PRNGKeyArray,
         dtype: Any | None = None,
         inference: bool = False,
@@ -1081,3 +1117,366 @@ class ESMC(eqx.Module):
         )
 
         self.sequence_head = RegressionHead(d_model, 64, key=regression_head_key)
+
+    def __call__(
+        self,
+        sequence_tokens: Array,
+        sequence_id: Array | None = None,
+    ) -> tuple[Array, Array, Array]:
+        if sequence_id is None:
+            # 1 is the PAD_TOKEN_ID
+            sequence_id = sequence_tokens != 1
+
+        x = eqx.filter_vmap(self.embed)(sequence_tokens)
+        x, _, hiddens = self.transformer(x, sequence_id=sequence_id)
+        hiddens = jnp.stack(hiddens, axis=0)
+        sequence_logits = x
+        for l in self.sequence_head:
+            sequence_logits = eqx.filter_vmap(l)(sequence_logits)
+
+        return sequence_logits, x, hiddens
+
+
+def rbf(values, v_min, v_max, n_bins=16):
+    rbf_centers = jnp.linspace(v_min, v_max, n_bins, dtype=values.dtype)
+    rbf_centers = rbf_centers.reshape([1] * len(values.shape) + [-1])
+    rbf_std = (v_max - v_min) / n_bins
+    z = (jnp.expand_dims(values, axis=-1) - rbf_centers) / rbf_std
+    return jnp.exp(-(z**2))
+
+
+def build_affine3d_from_coordinates(
+    coords: Array,
+) -> tuple[Affine3D, Array]:
+    _MAX_SUPPORTED_DISTANCE = 1e6
+    coord_mask = jnp.all(
+        jnp.all(jnp.isfinite(coords) & (coords < _MAX_SUPPORTED_DISTANCE), axis=-1),
+        axis=-1,
+    )
+
+    def atom3_to_backbone_affine(bb_positions: Array) -> Affine3D:
+        N = bb_positions[..., 0, :]
+        CA = bb_positions[..., 1, :]
+        C = bb_positions[..., 2, :]
+        return Affine3D.from_graham_schmidt(C, CA, N)
+
+    coords = coords.astype(jnp.float32)
+    coords = jnp.where(coord_mask[:, None, None], coords, 0.0)
+
+    masked_coords = jnp.where(coord_mask[:, None, None], coords, 0.0)
+    average_per_n_ca_c = masked_coords.sum(axis=0) / (coord_mask.sum() + 1e-8)
+
+    affine_from_average = atom3_to_backbone_affine(average_per_n_ca_c).as_matrix()
+
+    S = coords.shape[0]
+
+    affine_rot_mats = jnp.broadcast_to(affine_from_average.rot.tensor[None, :], (S, 9))
+    affine_trans = jnp.broadcast_to(affine_from_average.trans[None, :], (S, 3))
+
+    identity_rot = jax.lax.stop_gradient(
+        RotationMatrix.identity((S,), dtype=jnp.float32)
+    )
+
+    has_any_coords = coord_mask.any()
+    affine_rot_mats = jnp.where(has_any_coords, affine_rot_mats, identity_rot.tensor)
+
+    black_hole_affine = Affine3D(affine_trans, RotationMatrix(affine_rot_mats))
+
+    affine = atom3_to_backbone_affine(coords)
+    affine = Affine3D.from_tensor(
+        jnp.where(coord_mask[:, None], affine.tensor, black_hole_affine.tensor)
+    )
+
+    return affine, coord_mask
+
+
+class OutputHeads(eqx.Module):
+    sequence_head: list
+    structure_head: list
+    ss8_head: list
+    sasa_head: list
+    function_head: list
+    residue_head: list
+
+    def __init__(
+        self,
+        d_model: int,
+        *,
+        key: PRNGKeyArray,
+        dtype: Any | None = None,
+        inference: bool = False,
+    ):
+        if not dtype:
+            dtype = default_floating_dtype()
+        assert dtype is not None
+        keys = jax.random.split(key, 6)
+        self.sequence_head = RegressionHead(d_model, 64, key=keys[0], dtype=dtype)
+        self.structure_head = RegressionHead(d_model, 4096, key=keys[1], dtype=dtype)
+        self.ss8_head = RegressionHead(d_model, 8 + 3, key=keys[2], dtype=dtype)
+        self.sasa_head = RegressionHead(d_model, 16 + 3, key=keys[3], dtype=dtype)
+        self.function_head = RegressionHead(d_model, 260 * 8, key=keys[4], dtype=dtype)
+        self.residue_head = RegressionHead(d_model, 1478, key=keys[5], dtype=dtype)
+
+    def _apply_head(self, head: list, x: Array) -> Array:
+        for layer in head:
+            x = eqx.filter_vmap(layer)(x)
+        return x
+
+    def __call__(
+        self, x: Array, embed: Array
+    ) -> tuple[Array, Array, Array, Array, Array, Array, Array]:
+        sequence_logits = self._apply_head(self.sequence_head, x)
+        structure_logits = self._apply_head(self.structure_head, x)
+        secondary_structure_logits = self._apply_head(self.ss8_head, x)
+        sasa_logits = self._apply_head(self.sasa_head, x)
+        function_logits = self._apply_head(self.function_head, x)
+        function_logits = function_logits.reshape(*function_logits.shape[:-1], 8, -1)
+        residue_logits = self._apply_head(self.residue_head, x)
+        return (
+            sequence_logits,
+            structure_logits,
+            secondary_structure_logits,
+            sasa_logits,
+            function_logits,
+            residue_logits,
+            embed,
+        )
+
+
+class EncodeInputs(eqx.Module):
+    """
+    Module for encoding input features in the ESM-3 model.
+
+    Args:
+        d_model (int): The dimensionality of the model's hidden states.
+    """
+
+    sequence_embed: eqx.nn.Embedding
+    plddt_projection: eqx.nn.Linear
+    structure_per_res_plddt_projection: eqx.nn.Linear
+    structure_tokens_embed: eqx.nn.Embedding
+    ss8_embed: eqx.nn.Embedding
+    sasa_embed: eqx.nn.Embedding
+    function_embed: list[EmbeddingWithPadding]
+    residue_embed: EmbeddingBag
+
+    def __init__(
+        self,
+        d_model: int,
+        *,
+        key: PRNGKeyArray,
+        dtype: Any | None = None,
+        inference: bool = False,
+    ):
+        if not dtype:
+            dtype = default_floating_dtype()
+        assert dtype is not None
+
+        key, seq_embed_key = jax.random.split(key)
+        self.sequence_embed = eqx.nn.Embedding(
+            64, d_model, key=seq_embed_key, dtype=dtype
+        )
+        key, plddt_projection_key, struc_key = jax.random.split(key, 3)
+        self.plddt_projection = eqx.nn.Linear(
+            16, d_model, key=plddt_projection_key, dtype=dtype
+        )
+        self.structure_per_res_plddt_projection = eqx.nn.Linear(
+            16, d_model, key=struc_key, dtype=dtype
+        )
+
+        key, struc_embed_key = jax.random.split(key)
+        self.structure_tokens_embed = eqx.nn.Embedding(
+            4096 + 5, d_model, key=struc_embed_key, dtype=dtype
+        )
+
+        key, ss8_key, sasa_key = jax.random.split(key, 3)
+        # "Structural" features
+        self.ss8_embed = eqx.nn.Embedding(8 + 3, d_model, key=ss8_key, dtype=dtype)
+        self.sasa_embed = eqx.nn.Embedding(16 + 3, d_model, key=sasa_key, dtype=dtype)
+
+        # "Functional" features
+        key, *func_keys = jax.random.split(key, 9)
+        self.function_embed = [
+            EmbeddingWithPadding(
+                260, d_model // 8, padding_idx=0, key=func_keys[i], dtype=dtype
+            )
+            for i in range(8)
+        ]
+
+        key, residue_key = jax.random.split(key)
+        self.residue_embed = EmbeddingBag(
+            1478, d_model, padding_idx=0, key=residue_key, dtype=dtype
+        )
+
+    def __call__(
+        self,
+        sequence_tokens: Array,
+        structure_tokens: Array,
+        average_plddt: Array,
+        per_res_plddt: Array,
+        ss8_tokens: Array,
+        sasa_tokens: Array,
+        function_tokens: Array,
+        residue_annotation_tokens: Array,
+    ) -> Array:
+        sequence_embed = eqx.filter_vmap(self.sequence_embed)(sequence_tokens)
+
+        rbf_16_fn = functools.partial(rbf, v_min=0.0, v_max=1.0, n_bins=16)
+        plddt_embed = self.plddt_projection(rbf_16_fn(average_plddt))
+        structure_per_res_plddt = eqx.filter_vmap(
+            self.structure_per_res_plddt_projection
+        )(rbf_16_fn(per_res_plddt))
+
+        structure_embed = eqx.filter_vmap(self.structure_tokens_embed)(structure_tokens)
+        ss8_embed = eqx.filter_vmap(self.ss8_embed)(ss8_tokens)
+        sasa_embed = eqx.filter_vmap(self.sasa_embed)(sasa_tokens)
+
+        function_embed = jnp.concatenate(
+            [
+                eqx.filter_vmap(embed_fn)(function_tokens[..., i])
+                for i, embed_fn in enumerate(self.function_embed)
+            ],
+            axis=-1,
+        )
+
+        residue_embed = eqx.filter_vmap(self.residue_embed)(residue_annotation_tokens)
+
+        return (
+            sequence_embed
+            + plddt_embed
+            + structure_per_res_plddt
+            + structure_embed
+            + ss8_embed
+            + sasa_embed
+            + function_embed
+            + residue_embed
+        )
+
+
+class ESM3(eqx.Module):
+    encoder: EncodeInputs
+    transformer: TransformerStack
+    output_heads: OutputHeads
+
+    inference: bool
+
+    def __init__(
+        self,
+        d_model: int,
+        n_heads: int,
+        v_heads: int,
+        n_layers: int,
+        *,
+        key: PRNGKeyArray,
+        dtype: Any | None = None,
+        inference: bool = False,
+    ):
+        if not dtype:
+            dtype = default_floating_dtype()
+        assert dtype is not None
+        self.inference = inference
+
+        key, enc_key, trans_key, head_key = jax.random.split(key, 4)
+        self.encoder = EncodeInputs(d_model, key=enc_key, dtype=dtype)
+        self.transformer = TransformerStack(
+            d_model,
+            n_heads,
+            v_heads,
+            n_layers,
+            mask_and_zero_frameless=True,
+            key=trans_key,
+            dtype=dtype,
+            inference=inference,
+        )
+        self.output_heads = OutputHeads(d_model, key=head_key, dtype=dtype)
+
+    def __call__(
+        self,
+        sequence_tokens: Array | None = None,
+        structure_tokens: Array | None = None,
+        ss8_tokens: Array | None = None,
+        sasa_tokens: Array | None = None,
+        function_tokens: Array | None = None,
+        residue_annotation_tokens: Array | None = None,
+        average_plddt: Array | None = None,
+        per_res_plddt: Array | None = None,
+        structure_coords: Array | None = None,
+        chain_id: Array | None = None,
+        sequence_id: Array | None = None,
+    ) -> tuple[Array, Array, Array, Array, Array, Array, Array]:
+
+        L = next(
+            x.shape[0]
+            for x in [
+                sequence_tokens,
+                structure_tokens,
+                ss8_tokens,
+                sasa_tokens,
+                structure_coords,
+                function_tokens,
+                residue_annotation_tokens,
+            ]
+            if x is not None
+        )
+
+        if sequence_tokens is None:
+            sequence_tokens = jnp.full((L,), SEQUENCE_MASK_TOKEN, dtype=jnp.int32)
+        if ss8_tokens is None:
+            ss8_tokens = jnp.full((L,), SS8_PAD_TOKEN, dtype=jnp.int32)
+        if sasa_tokens is None:
+            sasa_tokens = jnp.full((L,), SASA_PAD_TOKEN, dtype=jnp.int32)
+        if average_plddt is None:
+            average_plddt = jnp.float32(1.0)
+        if per_res_plddt is None:
+            per_res_plddt = jnp.zeros((L,), dtype=jnp.float32)
+        if chain_id is None:
+            chain_id = jnp.zeros((L,), dtype=jnp.int32)
+        if residue_annotation_tokens is None:
+            residue_annotation_tokens = jnp.full(
+                (L, 16), RESIDUE_PAD_TOKEN, dtype=jnp.int32
+            )
+        if function_tokens is None:
+            function_tokens = jnp.full((L, 8), INTERPRO_PAD_TOKEN, dtype=jnp.int32)
+        if structure_coords is None:
+            structure_coords = jnp.full((L, 3, 3), jnp.nan, dtype=jnp.float32)
+
+        structure_coords = structure_coords[..., :3, :]
+        affine, affine_mask = build_affine3d_from_coordinates(structure_coords)
+
+        if structure_tokens is None:
+            structure_tokens = jnp.full((L,), STRUCTURE_MASK_TOKEN, dtype=jnp.int32)
+
+        structure_tokens = jnp.where(
+            structure_tokens == -1, STRUCTURE_MASK_TOKEN, structure_tokens
+        )
+        structure_tokens = jnp.where(
+            sequence_tokens == SEQUENCE_BOS_TOKEN, STRUCTURE_BOS_TOKEN, structure_tokens
+        )
+        structure_tokens = jnp.where(
+            sequence_tokens == SEQUENCE_PAD_TOKEN, STRUCTURE_PAD_TOKEN, structure_tokens
+        )
+        structure_tokens = jnp.where(
+            sequence_tokens == SEQUENCE_EOS_TOKEN, STRUCTURE_EOS_TOKEN, structure_tokens
+        )
+        structure_tokens = jnp.where(
+            sequence_tokens == SEQUENCE_CHAINBREAK_TOKEN,
+            STRUCTURE_CHAINBREAK_TOKEN,
+            structure_tokens,
+        )
+
+        x = self.encoder(
+            sequence_tokens,
+            structure_tokens,
+            average_plddt,
+            per_res_plddt,
+            ss8_tokens,
+            sasa_tokens,
+            function_tokens,
+            residue_annotation_tokens,
+        )
+
+        x, embedding, _ = self.transformer(
+            x, sequence_id, affine, affine_mask, chain_id
+        )
+
+        return self.output_heads(x, embedding)

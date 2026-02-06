@@ -1,3 +1,4 @@
+import equinox as eqx
 import jax.numpy as jnp
 import numpy as np
 import pytest
@@ -26,6 +27,9 @@ from esm.utils.structure.affine3d import (
 from esm.utils.structure.affine3d import (
     _sqrt_subgradient as torch_sqrt_subgradient,
 )
+from esm.utils.structure.affine3d import (
+    build_affine3d_from_coordinates as torch_build_affine,
+)
 
 from jaxonmodels.models.esm import (
     Affine3D as JaxAffine3D,
@@ -51,6 +55,7 @@ from jaxonmodels.models.esm import (
 from jaxonmodels.models.esm import (
     _sqrt_subgradient as jax_sqrt_subgradient,
 )
+from jaxonmodels.models.esm import build_affine3d_from_coordinates as jax_build_affine
 
 
 def _rand(*shape, seed=42):
@@ -555,3 +560,38 @@ def test_rotation_matrix_getitem_multidim():
     jax_out = np.array(JaxRotationMatrix(jnp.array(r))[1, 2:4].tensor)
 
     assert np.allclose(torch_out, jax_out, atol=1e-6)
+
+
+@pytest.mark.parametrize(
+    "seq_len, nan_ratio",
+    [
+        (7, 0.0),
+        (11, 0.3),
+        (11, 1.0),
+    ],
+)
+def test_build_affine3d_from_coordinates(seq_len, nan_ratio):
+    batch = 2
+    np.random.seed(42)
+
+    coords = np.random.randn(batch, seq_len, 3, 3).astype(np.float32)
+
+    num_nan = int(seq_len * nan_ratio)
+    if num_nan > 0:
+        coords[:, :num_nan, :, :] = np.nan
+
+    torch_coords = torch.from_numpy(coords.copy())
+    torch_affine, torch_mask = torch_build_affine(torch_coords)
+    torch_tensor = torch_affine.tensor.detach().numpy()
+    torch_mask = torch_mask.numpy()
+
+    jax_coords = jnp.array(coords)
+
+    def call_single(c):
+        affine, mask = jax_build_affine(c)
+        return affine.tensor, mask
+
+    jax_tensor, jax_mask = eqx.filter_vmap(call_single)(jax_coords)
+
+    assert np.array_equal(torch_mask, np.array(jax_mask))
+    assert np.allclose(torch_tensor, np.array(jax_tensor), atol=1e-5, equal_nan=True)

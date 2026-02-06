@@ -25,9 +25,10 @@ dependencies = [
     "jaxonlayers"
 ]
 [project.optional-dependencies]
-dev = ["pre-commit", "pytest", "mkdocs"]
+dev = ["pre-commit", "pytest", "mkdocs", "vulture"]
 examples = ["tensorflow-cpu", "tensorflow_datasets", "clu", "requests"]
 tests = ["torch==2.10.0", "torchvision==0.25.0"]
+esm = ["tokenizers", "huggingface_hub", "transformers"]
 
 [tool.uv.sources]
 torch = { index = "pytorch" }
