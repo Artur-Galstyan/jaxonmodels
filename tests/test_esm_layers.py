@@ -984,3 +984,7 @@ def test_esm3_forward_no_vmap():
     print("Has NaN (jax):", np.any(np.isnan(jax_seq_logits)))
 
     assert np.allclose(torch_seq_logits[0], jax_seq_logits, atol=1e-3)
+
+
+def test_smol():
+    JaxESMC.from_pretrained()

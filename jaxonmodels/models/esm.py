@@ -1,6 +1,9 @@
 import functools
 import math
+import os
 from abc import ABC
+from functools import cache
+from pathlib import Path
 
 import equinox as eqx
 import jax
@@ -44,6 +47,25 @@ SS8_PAD_TOKEN = 0
 SASA_PAD_TOKEN = 0
 RESIDUE_PAD_TOKEN = 0
 INTERPRO_PAD_TOKEN = 0
+
+
+@staticmethod
+@cache
+def data_root(model: str):
+    from huggingface_hub import snapshot_download
+
+    if "INFRA_PROVIDER" in os.environ:
+        return Path("")
+    # Try to download from hugginface if it doesn't exist
+    if model.startswith("esm3"):
+        path = Path(snapshot_download(repo_id="EvolutionaryScale/esm3-sm-open-v1"))
+    elif model.startswith("esmc-300"):
+        path = Path(snapshot_download(repo_id="EvolutionaryScale/esmc-300m-2024-12"))
+    elif model.startswith("esmc-600"):
+        path = Path(snapshot_download(repo_id="EvolutionaryScale/esmc-600m-2024-12"))
+    else:
+        raise ValueError(f"{model=} is an invalid model name.")
+    return path
 
 
 def _graham_schmidt(x_axis: Array, xy_plane: Array, eps: float = 1e-12):
@@ -1135,6 +1157,15 @@ class ESMC(eqx.Module):
             sequence_logits = eqx.filter_vmap(l)(sequence_logits)
 
         return sequence_logits, x, hiddens
+
+    @staticmethod
+    def from_pretrained():
+        import torch
+
+        state_dict = torch.load(
+            data_root("esmc-300") / "data/weights/esmc_300m_2024_12_v0.pth",
+        )
+        print(state_dict)
 
 
 def rbf(values, v_min, v_max, n_bins=16):
