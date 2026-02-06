@@ -136,7 +136,10 @@ class Rotation(ABC):
         )
 
 
-class RotationQuat(Rotation):
+class RotationQuat(Rotation, eqx.Module):
+    _quats: Array
+    _normalized: bool = eqx.field(static=True)
+
     def __init__(self, quats: Array, normalized=False):
         assert quats.shape[-1] == 4
         self._normalized = normalized
@@ -216,7 +219,9 @@ class RotationQuat(Rotation):
         return self if self._normalized else RotationQuat(self._quats, normalized=True)
 
 
-class RotationMatrix(Rotation):
+class RotationMatrix(Rotation, eqx.Module):
+    _rots: Array
+
     def __init__(self, rots: Array):
         if rots.shape[-1] == 9:
             rots = rots.reshape(*rots.shape[:-1], 3, 3)
@@ -320,8 +325,7 @@ class RotationMatrix(Rotation):
         return RotationMatrix(_graham_schmidt(x_axis, xy_plane, eps))
 
 
-@dataclass(frozen=True)
-class Affine3D:
+class Affine3D(eqx.Module):
     trans: Array
     rot: Rotation
 
@@ -537,6 +541,18 @@ def gelu_ln_ffn(
 
 
 class GeometricReasoningOriginalImpl(eqx.Module):
+    s_norm: eqx.nn.LayerNorm
+    proj: eqx.nn.Linear
+    distance_scale_per_head: Array
+    rotation_scale_per_head: Array
+    out_proj: eqx.nn.Linear
+
+    v_heads: int = eqx.field(static=True)
+    num_vector_messages: int = eqx.field(static=True)
+    mask_and_zero_frameless: bool = eqx.field(static=True)
+
+    inference: bool
+
     def __init__(
         self,
         c_s: int,
@@ -550,7 +566,132 @@ class GeometricReasoningOriginalImpl(eqx.Module):
         dtype: Any | None = None,
         inference: bool = False,
     ):
-        pass
+        if dtype is None:
+            dtype = default_floating_dtype()
+        assert dtype is not None
+        self.inference = inference
+
+        self.v_heads = v_heads
+        self.num_vector_messages = num_vector_messages
+        self.mask_and_zero_frameless = mask_and_zero_frameless
+
+        self.s_norm = eqx.nn.LayerNorm(c_s, use_bias=bias)
+        dim_proj = 4 * self.v_heads * 3 + self.v_heads * 3 * self.num_vector_messages
+        # 2 x (q, k) * number of heads * (x, y, z) +
+        #   number of heads * number of vector messages * (x, y, z)
+
+        key, proj_key, out_proj_key = jax.random.split(key, 3)
+        self.proj = eqx.nn.Linear(
+            c_s, dim_proj, use_bias=bias, key=proj_key, dtype=dtype
+        )
+        channels_out = self.v_heads * 3 * self.num_vector_messages
+        self.out_proj = eqx.nn.Linear(
+            channels_out, c_s, key=out_proj_key, use_bias=bias, dtype=dtype
+        )
+        self.distance_scale_per_head = jnp.zeros((self.v_heads))
+        self.rotation_scale_per_head = jnp.zeros((self.v_heads))
+
+    def __call__(
+        self,
+        s: Array,
+        affine: Affine3D,
+        affine_mask: Array,
+        sequence_id: Array | None,
+        chain_id: Array,
+    ):
+        seq_len = s.shape[0]
+
+        if sequence_id is None:
+            if jax.config.read("jax_enable_x64"):
+                dtype = jnp.int64
+            else:
+                dtype = jnp.int32
+            sequence_id = jnp.zeros(seq_len, dtype=dtype)
+
+        attn_bias = sequence_id[:, None] == sequence_id[None, :]
+        attn_bias = attn_bias[None, :, :].astype(s.dtype)
+        attn_bias = jnp.where(
+            affine_mask[None, None, :],
+            attn_bias,
+            jnp.finfo(attn_bias.dtype).min,
+        )
+
+        chain_id_mask = chain_id[:, None] != chain_id[None, :]
+        attn_bias = jnp.where(
+            chain_id_mask[None, :, :],
+            jnp.finfo(s.dtype).min,
+            attn_bias,
+        )
+        ns = eqx.filter_vmap(self.s_norm)(s)
+        proj_out = eqx.filter_vmap(self.proj)(ns)
+
+        split_idx = self.v_heads * 2 * 3 + self.v_heads * 3 * self.num_vector_messages
+        vec_rot = proj_out[..., :split_idx]
+        vec_dist = proj_out[..., split_idx:]
+
+        vec_rot = vec_rot.reshape(seq_len, -1, 3)
+        rotated = affine.rot[..., None].apply(vec_rot)
+
+        qr_end = self.v_heads
+        kr_end = self.v_heads * 2
+        query_rot = rotated[:, :qr_end, :]
+        key_rot = rotated[:, qr_end:kr_end, :]
+        value = rotated[:, kr_end:, :]
+
+        vec_dist = vec_dist.reshape(seq_len, -1, 3)
+        transformed = affine[..., None].apply(vec_dist)
+        query_dist, key_dist = jnp.split(transformed, 2, axis=-2)
+
+        query_dist = jnp.transpose(query_dist, (1, 0, 2))[:, :, None, :]
+        key_dist = jnp.transpose(key_dist, (1, 0, 2))[:, None, :, :]
+        query_rot = jnp.transpose(query_rot, (1, 0, 2))
+        key_rot = jnp.transpose(key_rot, (1, 2, 0))
+
+        value = value.reshape(seq_len, self.v_heads, self.num_vector_messages, 3)
+        value = jnp.transpose(value, (1, 0, 2, 3))
+        value = value.reshape(self.v_heads, seq_len, self.num_vector_messages * 3)
+
+        distance_term = jnp.linalg.norm(query_dist - key_dist, axis=-1) / math.sqrt(3)
+        rotation_term = query_rot @ key_rot / math.sqrt(3)
+
+        distance_term_weight = jax.nn.softplus(self.distance_scale_per_head)[
+            :, None, None
+        ]
+        rotation_term_weight = jax.nn.softplus(self.rotation_scale_per_head)[
+            :, None, None
+        ]
+
+        attn_weight = (
+            rotation_term * rotation_term_weight - distance_term * distance_term_weight
+        )
+
+        if attn_bias is not None:
+            s_q = attn_weight.shape[1]
+            s_k = attn_weight.shape[2]
+            _s_q = max(0, attn_bias.shape[1] - s_q)
+            _s_k = max(0, attn_bias.shape[2] - s_k)
+            attn_bias = attn_bias[:, _s_q:, _s_k:]
+            attn_weight = attn_weight + attn_bias
+
+        attn_weight = jax.nn.softmax(attn_weight, axis=-1)
+
+        attn_out = attn_weight @ value
+
+        attn_out = attn_out.reshape(self.v_heads, seq_len, self.num_vector_messages, 3)
+        attn_out = jnp.transpose(attn_out, (1, 0, 2, 3))
+        attn_out = attn_out.reshape(seq_len, self.v_heads * self.num_vector_messages, 3)
+
+        attn_out = affine.rot[..., None].invert().apply(attn_out)
+
+        attn_out = attn_out.reshape(
+            seq_len, self.v_heads * self.num_vector_messages * 3
+        )
+
+        if self.mask_and_zero_frameless:
+            attn_out = jnp.where(affine_mask[:, None], attn_out, 0.0)
+
+        s = eqx.filter_vmap(self.out_proj)(attn_out)
+        return s
 
 
 class ESMMultiHeadAttention(eqx.Module):
@@ -706,13 +847,14 @@ class UnifiedTransformerBlock(eqx.Module):
         Must be specified if `use_geom_attn` is True.
     """
 
-    attn: ESMMultiHeadAttention
-    geom_attn: GeometricReasoningOriginalImpl
+    attn: ESMMultiHeadAttention | None
+    geom_attn: GeometricReasoningOriginalImpl | None
     ffn: list
+
+    scaling_factor: float = eqx.field(static=True)
 
     use_plain_attn: bool = eqx.field(static=True)
     use_geom_attn: bool = eqx.field(static=True)
-    residue_scaling_factor: float = eqx.field(static=True)
 
     inference: bool
 
@@ -752,6 +894,8 @@ class UnifiedTransformerBlock(eqx.Module):
                 inference=inference,
                 dtype=dtype,
             )
+        else:
+            self.attn = None
 
         if self.use_geom_attn:
             if v_heads is None:
@@ -766,6 +910,8 @@ class UnifiedTransformerBlock(eqx.Module):
                 dtype=dtype,
                 inference=inference,
             )
+        else:
+            self.geom_attn = None
         key, ffn_key = jax.random.split(key)
         if ffn_type == "swiglu":
             self.ffn = swiglu_ln_ffn(
@@ -791,11 +937,29 @@ class UnifiedTransformerBlock(eqx.Module):
     def __call__(
         self,
         x: Array,
-        sequence_id: Array,
-        frames: Affine3D,
-        frames_mask: Array,
+        sequence_id: Array | None,
+        frames: Affine3D | None,
+        frames_mask: Array | None,
         chain_id: Array,
     ) -> Array:
+        if self.use_plain_attn:
+            assert self.attn is not None
+            r1 = self.attn(x, sequence_id)
+            x = x + r1 / self.scaling_factor
+
+        if self.use_geom_attn:
+            assert frames is not None
+            assert frames_mask is not None
+            assert self.geom_attn is not None
+            r2 = self.geom_attn(x, frames, frames_mask, sequence_id, chain_id)
+            x = x + r2 / self.scaling_factor
+
+        ffn_x = x
+        for l in self.ffn:
+            ffn_x = eqx.filter_vmap(l)(ffn_x)
+        r3 = ffn_x / self.scaling_factor
+        x = x + r3
+
         return x
 
 
