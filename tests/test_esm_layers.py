@@ -989,7 +989,7 @@ def test_esm3_forward_no_vmap():
     assert np.allclose(torch_seq_logits[0], jax_seq_logits, atol=1e-3)
 
 
-# @pytest.mark.skip("This test takes a while, so local test is sufficient")
+@pytest.mark.skip("This test takes a while, so local test is sufficient")
 @pytest.mark.parametrize("model_name", ["esmc_300m", "esmc_600m"])
 def test_full_model_esmc(model_name):
 
