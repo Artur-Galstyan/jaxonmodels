@@ -1026,7 +1026,7 @@ wheels = [
 
 [[package]]
 name = "jaxonmodels"
-version = "0.5.0"
+version = "0.5.3"
 source = { editable = "." }
 dependencies = [
     { name = "beartype" },
