@@ -8,17 +8,12 @@ from pathlib import Path
 import equinox as eqx
 import jax
 import jax.numpy as jnp
-from beartype.typing import (
-    Any,
-    Literal,
-    Self,
-    Type,
-    Union,
-)
+from beartype.typing import Any, Literal, Self, Type, Union, cast
 from jaxonlayers.functions.activation import swiglu
 from jaxonlayers.functions.normalization import normalize
 from jaxonlayers.layers.embedding import EmbeddingBag, EmbeddingWithPadding
 from jaxtyping import Array, Float, Int, PRNGKeyArray
+from statedict2pytree.converter import autoconvert
 
 from jaxonmodels.functions import default_floating_dtype
 
@@ -47,6 +42,43 @@ SS8_PAD_TOKEN = 0
 SASA_PAD_TOKEN = 0
 RESIDUE_PAD_TOKEN = 0
 INTERPRO_PAD_TOKEN = 0
+SEQUENCE_VOCAB = [
+    "<cls>",
+    "<pad>",
+    "<eos>",
+    "<unk>",
+    "L",
+    "A",
+    "G",
+    "V",
+    "S",
+    "E",
+    "R",
+    "T",
+    "I",
+    "D",
+    "P",
+    "K",
+    "Q",
+    "N",
+    "F",
+    "Y",
+    "M",
+    "H",
+    "W",
+    "C",
+    "X",
+    "B",
+    "U",
+    "Z",
+    "O",
+    ".",
+    "-",
+    "|",
+    "<mask>",
+]
+SEQUENCE_BOS_TOKEN = 0
+SEQUENCE_EOS_TOKEN = 2
 
 
 @staticmethod
@@ -1159,13 +1191,47 @@ class ESMC(eqx.Module):
         return sequence_logits, x, hiddens
 
     @staticmethod
-    def from_pretrained():
+    def from_pretrained(
+        model: Literal["esmc_300m", "esmc_600m"],
+        *,
+        key: PRNGKeyArray | None = None,
+        dtype: Any | None = None,
+        inference: bool = False,
+    ) -> "ESMC":
         import torch
 
-        state_dict = torch.load(
-            data_root("esmc-300") / "data/weights/esmc_300m_2024_12_v0.pth",
+        if model == "esmc_300m":
+            model_path = data_root("esmc-300") / "data/weights/esmc_300m_2024_12_v0.pth"
+            d_model = 960
+            n_heads = 15
+            n_layers = 30
+
+        elif model == "esmc_600m":
+            d_model = 1152
+            n_heads = 18
+            n_layers = 36
+
+            model_path = data_root("esmc-600") / "data/weights/esmc_600m_2024_12_v0.pth"
+        else:
+            raise ValueError(
+                f"Received invalid model: {model} It must be esmc_300m or esmc_600m"
+            )
+        key = jax.random.key(42) if key is None else key
+        model_path = cast(Path, model_path)
+        state_dict = torch.load(model_path, map_location="cpu")
+
+        esmc = ESMC(
+            d_model=d_model,
+            n_heads=n_heads,
+            n_layers=n_layers,
+            key=key,
+            dtype=dtype,
+            inference=inference,
         )
-        print(state_dict)
+
+        esmc = autoconvert(esmc, state_dict)
+
+        return esmc
 
 
 def rbf(values, v_min, v_max, n_bins=16):
@@ -1511,3 +1577,566 @@ class ESM3(eqx.Module):
         )
 
         return self.output_heads(x, embedding)
+
+    @staticmethod
+    def from_pretrained(
+        model: Literal["esm3_open"] = "esm3_open",
+        *,
+        key: PRNGKeyArray | None = None,
+        dtype: Any | None = None,
+        inference: bool = False,
+    ) -> "ESM3":
+        import torch
+
+        if model == "esm3_open":
+            d_model = 1536
+            n_heads = 24
+            v_heads = 256
+            n_layers = 48
+            model_path = data_root("esm3") / "data/weights/esm3_sm_open_v1.pth"
+        else:
+            raise ValueError(f"Unknown model: {model}. Must be 'esm3_open'.")
+
+        key = jax.random.key(42) if key is None else key
+        state_dict = torch.load(model_path, map_location="cpu")
+        state_dict = {
+            k: v.float() if v.dtype == torch.bfloat16 else v
+            for k, v in state_dict.items()
+        }
+        esm3 = ESM3(
+            d_model=d_model,
+            n_heads=n_heads,
+            v_heads=v_heads,
+            n_layers=n_layers,
+            key=key,
+            dtype=dtype,
+            inference=inference,
+        )
+        esm3 = autoconvert(esm3, state_dict)
+        return esm3
+
+
+BB_COORDINATES = jnp.array(
+    [
+        [0.5256, 1.3612, 0.0000],
+        [0.0000, 0.0000, 0.0000],
+        [-1.5251, 0.0000, 0.0000],
+    ]
+)
+
+
+class Dim6RotStructureHead(eqx.Module):
+    ffn1: eqx.nn.Linear
+    activation_fn: eqx.nn.Lambda
+    norm: eqx.nn.LayerNorm
+    proj: eqx.nn.Linear
+    trans_scale_factor: float = eqx.field(static=True)
+
+    def __init__(
+        self,
+        input_dim: int,
+        trans_scale_factor: float = 10,
+        *,
+        key: PRNGKeyArray,
+        dtype: Any | None = None,
+    ):
+        if dtype is None:
+            dtype = default_floating_dtype()
+        key1, key2 = jax.random.split(key)
+        self.ffn1 = eqx.nn.Linear(input_dim, input_dim, key=key1, dtype=dtype)
+        self.activation_fn = eqx.nn.Lambda(fn=jax.nn.gelu)
+        self.norm = eqx.nn.LayerNorm(input_dim)
+        self.proj = eqx.nn.Linear(input_dim, 9 + 7 * 2, key=key2, dtype=dtype)
+        self.trans_scale_factor = trans_scale_factor
+
+    def __call__(
+        self, x: Array, affine: Affine3D | None, affine_mask: Array
+    ) -> tuple[Array, Array]:
+        seq_len = x.shape[0]
+
+        if affine is None:
+            rigids = Affine3D.identity(
+                (seq_len,),
+                rotation_type=RotationMatrix,
+            )
+        else:
+            rigids = affine
+
+        x = eqx.filter_vmap(self.ffn1)(x)
+        x = jax.nn.gelu(x)
+        x = eqx.filter_vmap(self.norm)(x)
+        x = eqx.filter_vmap(self.proj)(x)
+
+        trans, x_axis, y_axis, angles = jnp.split(x, [3, 6, 9], axis=-1)
+        trans = trans * self.trans_scale_factor
+        x_axis = x_axis / (jnp.linalg.norm(x_axis, axis=-1, keepdims=True) + 1e-5)
+        y_axis = y_axis / (jnp.linalg.norm(y_axis, axis=-1, keepdims=True) + 1e-5)
+
+        update = Affine3D.from_graham_schmidt(x_axis + trans, trans, y_axis + trans)
+        update = update.mask(affine_mask)
+        rigids = rigids.compose(update)
+        affine_tensor = rigids.tensor
+
+        bb_local = jnp.broadcast_to(BB_COORDINATES[None, :, :], (seq_len, 3, 3))
+        pred_xyz = rigids[..., None].apply(bb_local)
+
+        return affine_tensor, pred_xyz
+
+
+class PairwisePredictionHead(eqx.Module):
+    downproject: eqx.nn.Linear
+    linear1: eqx.nn.Linear
+    norm: eqx.nn.LayerNorm
+    linear2: eqx.nn.Linear
+
+    def __init__(
+        self,
+        input_dim: int,
+        downproject_dim: int,
+        hidden_dim: int,
+        n_bins: int,
+        bias: bool = True,
+        pairwise_state_dim: int = 0,
+        *,
+        key: PRNGKeyArray,
+        dtype: Any | None = None,
+    ):
+        if dtype is None:
+            dtype = default_floating_dtype()
+        k1, k2, k3 = jax.random.split(key, 3)
+        self.downproject = eqx.nn.Linear(
+            input_dim, downproject_dim, use_bias=bias, key=k1, dtype=dtype
+        )
+        self.linear1 = eqx.nn.Linear(
+            downproject_dim + pairwise_state_dim,
+            hidden_dim,
+            use_bias=bias,
+            key=k2,
+            dtype=dtype,
+        )
+        self.norm = eqx.nn.LayerNorm(hidden_dim)
+        self.linear2 = eqx.nn.Linear(
+            hidden_dim, n_bins, use_bias=bias, key=k3, dtype=dtype
+        )
+
+    def __call__(self, x: Array, pairwise: Array | None = None) -> Array:
+        x = eqx.filter_vmap(self.downproject)(x)
+        half = x.shape[-1] // 2
+        q, k = x[..., :half], x[..., half:]
+
+        prod = q[None, :, :] * k[:, None, :]
+        diff = q[None, :, :] - k[:, None, :]
+
+        if pairwise is not None:
+            x = jnp.concatenate([prod, diff, pairwise], axis=-1)
+        else:
+            x = jnp.concatenate([prod, diff], axis=-1)
+
+        apply_linear1 = eqx.filter_vmap(eqx.filter_vmap(self.linear1))
+        x = apply_linear1(x)
+        x = jax.nn.gelu(x)
+        apply_norm = eqx.filter_vmap(eqx.filter_vmap(self.norm))
+        x = apply_norm(x)
+        apply_linear2 = eqx.filter_vmap(eqx.filter_vmap(self.linear2))
+        x = apply_linear2(x)
+
+        return x
+
+
+class VQVAERegressionHead(eqx.Module):
+    dense: eqx.nn.Linear
+    norm: eqx.nn.LayerNorm
+    output: eqx.nn.Linear
+
+    def __init__(
+        self,
+        embed_dim: int,
+        output_dim: int,
+        *,
+        key: PRNGKeyArray,
+        dtype: Any | None = None,
+    ):
+        if dtype is None:
+            dtype = default_floating_dtype()
+        k1, k2 = jax.random.split(key)
+        self.dense = eqx.nn.Linear(embed_dim, embed_dim, key=k1, dtype=dtype)
+        self.norm = eqx.nn.LayerNorm(embed_dim)
+        self.output = eqx.nn.Linear(embed_dim, output_dim, key=k2, dtype=dtype)
+
+    def __call__(self, x: Array) -> Array:
+        x = eqx.filter_vmap(self.dense)(x)
+        x = jax.nn.gelu(x)
+        x = eqx.filter_vmap(self.norm)(x)
+        x = eqx.filter_vmap(self.output)(x)
+        return x
+
+
+VQVAE_CODEBOOK_SIZE = 4096
+VQVAE_SPECIAL_TOKENS = {
+    "MASK": 4096,
+    "EOS": 4097,
+    "BOS": 4098,
+    "PAD": 4099,
+    "CHAINBREAK": 4100,
+}
+VQVAE_DIRECTION_LOSS_BINS = 16
+VQVAE_PAE_BINS = 64
+VQVAE_MAX_PAE_BIN = 31.0
+VQVAE_PLDDT_BINS = 50
+
+
+def compute_predicted_aligned_error(
+    logits: Array,
+    aa_mask: Array,
+    sequence_id: Array | None = None,
+    max_bin: float = 31.0,
+) -> Array:
+    n_bins = logits.shape[-1]
+    bins = jnp.linspace(0, max_bin, n_bins - 1)
+    step = max_bin / (n_bins - 2)
+    bin_centers = bins + step / 2
+    bin_centers = jnp.concatenate([bin_centers, jnp.array([bin_centers[-1] + step])])
+    square_mask = aa_mask[:, None] * aa_mask[None, :]
+    min_v = jnp.finfo(logits.dtype).min
+    probs = jax.nn.softmax(jnp.where(square_mask[..., None], logits, min_v), axis=-1)
+    return (probs * bin_centers).sum(axis=-1)
+
+
+def compute_tm(
+    logits: Array,
+    aa_mask: Array,
+    max_bin: float = 31.0,
+) -> Array:
+    square_mask = (aa_mask[:, None] * aa_mask[None, :]).astype(jnp.bool_)
+    seqlen = aa_mask.sum()
+    n_bins = logits.shape[-1]
+    bins = jnp.linspace(0, max_bin, n_bins - 1)
+    step = max_bin / (n_bins - 2)
+    bin_centers = bins + step / 2
+    bin_centers = jnp.concatenate([bin_centers, jnp.array([bin_centers[-1] + step])])
+    d0 = 1.24 * (jnp.maximum(seqlen, 19) - 15) ** (1.0 / 3.0) - 1.8
+    f_d = 1.0 / (1 + (bin_centers / d0) ** 2)
+    min_v = jnp.finfo(logits.dtype).min
+    probs = jax.nn.softmax(jnp.where(square_mask[..., None], logits, min_v), axis=-1)
+    ptm = (probs * f_d[None, :]).sum(axis=-1)
+    eps = 1e-10
+    ptm = jnp.where(square_mask, ptm, 0.0).sum(axis=-1) / (
+        square_mask.sum(axis=-1) + eps
+    )
+    return ptm.max()
+
+
+def categorical_mixture_mean(
+    logits: Array, n_bins: int, start: float = 0.0, end: float = 1.0
+) -> Array:
+    bins = jnp.linspace(start, end, n_bins + 1)
+    v_bins = (bins[:-1] + bins[1:]) / 2
+    probs = jax.nn.softmax(logits, axis=-1)
+    return (probs * v_bins).sum(axis=-1)
+
+
+class StructureTokenDecoder(eqx.Module):
+    embed: eqx.nn.Embedding
+    decoder_stack: TransformerStack
+    affine_output_projection: Dim6RotStructureHead
+    pairwise_classification_head: PairwisePredictionHead
+    plddt_head: VQVAERegressionHead
+
+    pairwise_bins: list[int] = eqx.field(static=True)
+
+    def __init__(
+        self,
+        d_model: int,
+        n_heads: int,
+        n_layers: int,
+        *,
+        key: PRNGKeyArray,
+        dtype: Any | None = None,
+    ):
+        if dtype is None:
+            dtype = default_floating_dtype()
+        k1, k2, k3, k4, k5 = jax.random.split(key, 5)
+
+        self.embed = eqx.nn.Embedding(
+            VQVAE_CODEBOOK_SIZE + len(VQVAE_SPECIAL_TOKENS),
+            d_model,
+            key=k1,
+            dtype=dtype,
+        )
+        self.decoder_stack = TransformerStack(
+            d_model,
+            n_heads,
+            1,
+            n_layers,
+            scale_residue=False,
+            n_layers_geom=0,
+            key=k2,
+            dtype=dtype,
+        )
+        self.affine_output_projection = Dim6RotStructureHead(
+            d_model, trans_scale_factor=10, key=k3, dtype=dtype
+        )
+
+        self.pairwise_bins = [64, VQVAE_DIRECTION_LOSS_BINS * 6, VQVAE_PAE_BINS]
+        self.pairwise_classification_head = PairwisePredictionHead(
+            input_dim=d_model,
+            downproject_dim=128,
+            hidden_dim=128,
+            n_bins=sum(self.pairwise_bins),
+            bias=False,
+            key=k4,
+            dtype=dtype,
+        )
+        self.plddt_head = VQVAERegressionHead(
+            embed_dim=d_model, output_dim=VQVAE_PLDDT_BINS, key=k5, dtype=dtype
+        )
+
+    def decode(
+        self,
+        structure_tokens: Array,
+        sequence_id: Array | None = None,
+    ) -> dict:
+        seq_len = structure_tokens.shape[0]
+
+        if sequence_id is None:
+            sequence_id = jnp.zeros(seq_len, dtype=jnp.int32)
+        chain_id = jnp.zeros(seq_len, dtype=jnp.int32)
+
+        x = eqx.filter_vmap(self.embed)(structure_tokens)
+        x, _, _ = self.decoder_stack(
+            x, sequence_id=sequence_id, frames=None, frames_mask=None, chain_id=chain_id
+        )
+
+        affine_mask = jnp.zeros(seq_len, dtype=jnp.bool_)
+        tensor7_affine, bb_pred = self.affine_output_projection(
+            x, affine=None, affine_mask=affine_mask
+        )
+
+        pairwise_logits = self.pairwise_classification_head(x)
+        _, _, pae_logits = jnp.split(
+            pairwise_logits,
+            [self.pairwise_bins[0], self.pairwise_bins[0] + self.pairwise_bins[1]],
+            axis=-1,
+        )
+
+        special_tokens_mask = structure_tokens >= min(VQVAE_SPECIAL_TOKENS.values())
+        aa_mask = ~special_tokens_mask
+
+        pae = compute_predicted_aligned_error(
+            pae_logits, aa_mask, sequence_id=sequence_id, max_bin=VQVAE_MAX_PAE_BIN
+        )
+        ptm = compute_tm(pae_logits, aa_mask, max_bin=VQVAE_MAX_PAE_BIN)
+
+        plddt_logits = self.plddt_head(x)
+        plddt_value = categorical_mixture_mean(
+            plddt_logits, n_bins=plddt_logits.shape[-1]
+        )
+
+        return {
+            "tensor7_affine": tensor7_affine,
+            "bb_pred": bb_pred,
+            "plddt": plddt_value,
+            "ptm": ptm,
+            "predicted_aligned_error": pae,
+        }
+
+    @staticmethod
+    def from_pretrained(
+        *,
+        key: PRNGKeyArray | None = None,
+        dtype: Any | None = None,
+    ) -> "StructureTokenDecoder":
+        import torch
+
+        d_model = 1280
+        n_heads = 20
+        n_layers = 30
+        model_path = data_root("esm3") / "data/weights/esm3_structure_decoder_v0.pth"
+
+        key = jax.random.key(42) if key is None else key
+        state_dict = torch.load(model_path, map_location="cpu")
+        state_dict = {
+            k: v.float() if v.dtype == torch.bfloat16 else v
+            for k, v in state_dict.items()
+        }
+
+        decoder = StructureTokenDecoder(
+            d_model=d_model,
+            n_heads=n_heads,
+            n_layers=n_layers,
+            key=key,
+            dtype=dtype,
+        )
+        decoder = autoconvert(decoder, state_dict)
+        return decoder
+
+
+def cosine_schedule(t):
+    return jnp.cos(t * math.pi * 0.5)
+
+
+def sample_structure_tokens(
+    logits: Array,
+    temperature: float = 1.0,
+    top_p: float = 1.0,
+    *,
+    key: PRNGKeyArray,
+) -> Array:
+    if temperature <= 0:
+        return jnp.argmax(logits, axis=-1)
+
+    logits = logits / temperature
+
+    if top_p < 1.0:
+        sorted_indices = jnp.argsort(logits, axis=-1)[::-1]
+        sorted_logits = jnp.take_along_axis(logits, sorted_indices, axis=-1)
+        sorted_probs = jax.nn.softmax(sorted_logits, axis=-1)
+        cumulative_probs = jnp.cumsum(sorted_probs, axis=-1)
+        mask = cumulative_probs - sorted_probs > top_p
+        sorted_logits = jnp.where(mask, -jnp.inf, sorted_logits)
+        logits = jnp.zeros_like(logits).at[sorted_indices].set(sorted_logits)
+
+    return jax.random.categorical(key, logits, axis=-1)
+
+
+def get_annealed_temperature(step: int, num_steps: int, initial_temperature: float):
+    step_ratio = step / max(1, num_steps - 1)
+    return max(initial_temperature - step_ratio, 0.001) ** 2
+
+
+def _sample_step(
+    structure_logits: Array,
+    structure_tokens: Array,
+    can_sample: Array,
+    total_to_sample: int,
+    step: int,
+    num_steps: int,
+    temperature: float,
+    top_p: float,
+    strategy: str,
+    key: PRNGKeyArray,
+) -> Array:
+    sample_key, perm_key = jax.random.split(key)
+    seq_len = structure_tokens.shape[0]
+
+    sampled = sample_structure_tokens(
+        structure_logits[:, :4096],
+        temperature=temperature,
+        top_p=top_p,
+        key=sample_key,
+    )
+
+    still_masked_count = can_sample.sum()
+    perc_masked_after = cosine_schedule(jnp.array((step + 1) / num_steps))
+    num_masked_after = jnp.int32(perc_masked_after * total_to_sample + 0.1)
+    num_to_sample = jnp.maximum(still_masked_count - num_masked_after, 0)
+
+    if strategy == "entropy":
+        logprobs = jax.nn.log_softmax(structure_logits[:, :4096], axis=-1)
+        probs = jnp.exp(logprobs)
+        entropy = -(probs * logprobs).sum(axis=-1)
+        scores = jnp.where(can_sample, entropy, jnp.inf)
+    else:
+        scores = jnp.where(
+            can_sample, jax.random.uniform(perm_key, (seq_len,)), jnp.inf
+        )
+
+    ranks = jnp.argsort(jnp.argsort(scores))
+    where_to_sample = (ranks < num_to_sample) & can_sample
+
+    return jnp.where(where_to_sample, sampled, structure_tokens)
+
+
+def iterative_sample_structure(
+    model,
+    sequence_tokens: Array,
+    num_steps: int = 8,
+    temperature: float = 1.0,
+    temperature_annealing: bool = True,
+    top_p: float = 1.0,
+    strategy: str = "random",
+    *,
+    key: PRNGKeyArray,
+) -> Array:
+    seq_len = sequence_tokens.shape[0]
+
+    structure_tokens = jnp.full(seq_len, STRUCTURE_MASK_TOKEN, dtype=jnp.int32)
+    structure_tokens = structure_tokens.at[0].set(STRUCTURE_BOS_TOKEN)
+    structure_tokens = structure_tokens.at[-1].set(STRUCTURE_EOS_TOKEN)
+
+    fixed_mask = jnp.ones(seq_len, dtype=jnp.bool_)
+    fixed_mask = fixed_mask.at[0].set(False)
+    fixed_mask = fixed_mask.at[-1].set(False)
+
+    total_to_sample = int(fixed_mask.sum())
+
+    for t in range(num_steps):
+        key, step_key = jax.random.split(key)
+
+        output = model(
+            sequence_tokens=sequence_tokens, structure_tokens=structure_tokens
+        )
+        structure_logits = output[1]
+
+        if temperature_annealing:
+            temp = get_annealed_temperature(t, num_steps, temperature)
+        else:
+            temp = temperature
+
+        can_sample = fixed_mask & (structure_tokens == STRUCTURE_MASK_TOKEN)
+
+        structure_tokens = _sample_step(
+            structure_logits,
+            structure_tokens,
+            can_sample,
+            total_to_sample,
+            t,
+            num_steps,
+            temp,
+            top_p,
+            strategy,
+            step_key,
+        )
+
+    return structure_tokens
+
+
+def fold_protein(
+    esm3_model,
+    decoder: StructureTokenDecoder,
+    sequence: str,
+    num_steps: int = 8,
+    temperature: float = 1.0,
+    temperature_annealing: bool = True,
+    top_p: float = 1.0,
+    strategy: str = "random",
+    *,
+    key: PRNGKeyArray,
+) -> dict:
+    tokens = [SEQUENCE_BOS_TOKEN]
+    for ch in sequence:
+        tokens.append(SEQUENCE_VOCAB.index(ch))
+    tokens.append(SEQUENCE_EOS_TOKEN)
+    sequence_tokens = jnp.array(tokens, dtype=jnp.int32)
+
+    structure_tokens = iterative_sample_structure(
+        esm3_model,
+        sequence_tokens,
+        num_steps=num_steps,
+        temperature=temperature,
+        temperature_annealing=temperature_annealing,
+        top_p=top_p,
+        strategy=strategy,
+        key=key,
+    )
+
+    result = decoder.decode(structure_tokens)
+
+    return {
+        "sequence": sequence,
+        "structure_tokens": structure_tokens,
+        "bb_coords": result["bb_pred"],
+        "plddt": result["plddt"],
+        "ptm": result["ptm"],
+        "pae": result["predicted_aligned_error"],
+    }

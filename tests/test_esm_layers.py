@@ -25,18 +25,21 @@ from statedict2pytree.converter import autoconvert
 
 from jaxonmodels.models.esm import ESM3 as JaxESM3
 from jaxonmodels.models.esm import ESMC as JaxESMC
+from jaxonmodels.models.esm import VQVAE_SPECIAL_TOKENS, ESMMultiHeadAttention
 from jaxonmodels.models.esm import (
     Affine3D as JaxAffine3D,
 )
+from jaxonmodels.models.esm import Dim6RotStructureHead as JaxDim6Rot
 from jaxonmodels.models.esm import EncodeInputs as JaxEncodeInputs
-from jaxonmodels.models.esm import ESMMultiHeadAttention
 from jaxonmodels.models.esm import (
     GeometricReasoningOriginalImpl as JaxGeomAttn,
 )
 from jaxonmodels.models.esm import OutputHeads as JaxOutputHeads
+from jaxonmodels.models.esm import PairwisePredictionHead as JaxPairwisePredictionHead
 from jaxonmodels.models.esm import (
     RotationMatrix as JaxRotationMatrix,
 )
+from jaxonmodels.models.esm import StructureTokenDecoder as JaxStructureTokenDecoder
 from jaxonmodels.models.esm import UnifiedTransformerBlock as JaxBlock
 
 
@@ -986,5 +989,237 @@ def test_esm3_forward_no_vmap():
     assert np.allclose(torch_seq_logits[0], jax_seq_logits, atol=1e-3)
 
 
-def test_smol():
-    JaxESMC.from_pretrained()
+# @pytest.mark.skip("This test takes a while, so local test is sufficient")
+@pytest.mark.parametrize("model_name", ["esmc_300m", "esmc_600m"])
+def test_full_model_esmc(model_name):
+
+    jax_esmc_300 = JaxESMC.from_pretrained(model_name)
+
+    from esm.models.esmc import ESMC
+    from esm.sdk.api import (
+        ESMProtein,
+    )
+
+    protein = ESMProtein(sequence="AAAAA")
+    client = ESMC.from_pretrained(model_name)
+    protein_tensor = client.encode(protein)
+
+    sequence_tokens = protein_tensor.sequence.detach().numpy()
+    jax_logits, jax_embeddings, jax_hidden = jax_esmc_300(sequence_tokens)
+    torch_output = client.forward(protein_tensor.sequence.unsqueeze(0))
+
+    torch_logits = torch_output.sequence_logits.squeeze(0).detach().numpy()
+    assert np.allclose(
+        np.array(jax_logits),
+        torch_logits,
+        atol=9e-3,
+    )
+    torch_embeddings = torch_output.embeddings.squeeze(0).detach().numpy()
+    assert np.allclose(
+        np.array(jax_embeddings),
+        torch_embeddings,
+        atol=9e-3,
+    )
+    torch_hidden = torch_output.hidden_states.squeeze(1).detach().numpy()
+
+    assert np.allclose(
+        np.array(jax_hidden),
+        torch_hidden,
+        atol=9e-3,
+    )
+
+
+def test_full_model_esm3():
+    jax_esm3 = JaxESM3.from_pretrained("esm3_open")
+
+    from esm.models.esm3 import ESM3 as TorchESM3
+    from esm.sdk.api import ESMProtein
+
+    client = TorchESM3.from_pretrained("esm3-open")
+
+    protein = ESMProtein(sequence="AAAAA")
+    protein_tensor = client.encode(protein)
+
+    sequence_tokens = protein_tensor.sequence
+
+    with torch.no_grad():
+        torch_out = client.forward(
+            sequence_tokens=sequence_tokens.unsqueeze(0),
+        )
+
+    jax_out = jax_esm3(
+        sequence_tokens=jnp.array(sequence_tokens.numpy()),
+    )
+
+    torch_seq_logits = torch_out.sequence_logits.squeeze(0).numpy()
+    jax_seq_logits = np.array(jax_out[0])
+
+    print(f"{torch_seq_logits.shape=}")
+    print(f"{jax_seq_logits.shape=}")
+    print(f"max diff: {np.abs(torch_seq_logits - jax_seq_logits).max()}")
+
+    assert np.allclose(jax_seq_logits, torch_seq_logits, atol=9e-3)
+
+
+@pytest.mark.parametrize("d_model, seq_len", [(64, 7), (128, 11)])
+def test_dim6rot_structure_head(d_model, seq_len):
+    np.random.seed(42)
+
+    x = np.random.randn(1, seq_len, d_model).astype(np.float32)
+    affine_mask = np.zeros((1, seq_len), dtype=np.bool_)
+
+    from esm.layers.structure_proj import Dim6RotStructureHead as TorchDim6Rot
+
+    torch_head = TorchDim6Rot(d_model, trans_scale_factor=10)
+    state_dict = torch_head.state_dict()
+
+    with torch.no_grad():
+        torch_affine, torch_xyz = torch_head(
+            torch.from_numpy(x),
+            affine=None,
+            affine_mask=torch.from_numpy(affine_mask),
+        )
+    torch_affine = torch_affine.numpy()
+    torch_xyz = torch_xyz.numpy()
+
+    key = jax.random.key(42)
+    jax_head = JaxDim6Rot(d_model, trans_scale_factor=10, key=key)
+    jax_head = autoconvert(jax_head, state_dict)
+
+    jax_affine, jax_xyz = jax_head(
+        jnp.array(x[0]),
+        affine=None,
+        affine_mask=jnp.array(affine_mask[0]),
+    )
+
+    print(f"affine max diff: {np.abs(torch_affine[0] - np.array(jax_affine)).max()}")
+    print(f"xyz max diff: {np.abs(torch_xyz[0] - np.array(jax_xyz)).max()}")
+
+    assert np.allclose(np.array(jax_affine), torch_affine[0], atol=3e-3)
+    assert np.allclose(np.array(jax_xyz), torch_xyz[0], atol=3e-3)
+
+
+@pytest.mark.parametrize("d_model, seq_len", [(64, 7), (128, 11)])
+def test_pairwise_prediction_head(d_model, seq_len):
+    np.random.seed(42)
+
+    x = np.random.randn(1, seq_len, d_model).astype(np.float32)
+
+    from esm.models.vqvae import PairwisePredictionHead as TorchPairwise
+
+    torch_head = TorchPairwise(
+        input_dim=d_model,
+        downproject_dim=128,
+        hidden_dim=128,
+        n_bins=224,
+        bias=False,
+    )
+    state_dict = torch_head.state_dict()
+
+    with torch.no_grad():
+        torch_out = torch_head(torch.from_numpy(x)).numpy()
+
+    key = jax.random.key(42)
+    jax_head = JaxPairwisePredictionHead(
+        input_dim=d_model,
+        downproject_dim=128,
+        hidden_dim=128,
+        n_bins=224,
+        bias=False,
+        key=key,
+    )
+    jax_head = autoconvert(jax_head, state_dict)
+
+    jax_out = np.array(jax_head(jnp.array(x[0])))
+
+    print(f"shape torch: {torch_out.shape}")
+    print(f"shape jax: {jax_out.shape}")
+    print(f"max diff: {np.abs(torch_out[0] - jax_out).max()}")
+
+    assert np.allclose(jax_out, torch_out[0], atol=1e-3)
+
+
+@pytest.mark.parametrize(
+    "d_model, n_heads, n_layers, seq_len",
+    [
+        (64, 4, 2, 7),
+        (128, 8, 2, 11),
+    ],
+)
+def test_structure_token_decoder(d_model, n_heads, n_layers, seq_len):
+    np.random.seed(42)
+
+    structure_tokens = np.random.randint(0, 4096, size=(1, seq_len)).astype(np.int64)
+    structure_tokens[:, 0] = VQVAE_SPECIAL_TOKENS["BOS"]
+    structure_tokens[:, -1] = VQVAE_SPECIAL_TOKENS["EOS"]
+
+    from esm.models.vqvae import StructureTokenDecoder as TorchDecoder
+
+    torch_decoder = TorchDecoder(d_model, n_heads, n_layers)
+    state_dict = torch_decoder.state_dict()
+
+    with torch.no_grad():
+        torch_out = torch_decoder.decode(torch.from_numpy(structure_tokens))
+
+    torch_affine = torch_out["tensor7_affine"].numpy()
+    torch_bb = torch_out["bb_pred"].numpy()
+    torch_plddt = torch_out["plddt"].numpy()
+    torch_ptm = torch_out["ptm"].numpy()
+    torch_pae = torch_out["predicted_aligned_error"].numpy()
+
+    key = jax.random.key(42)
+    jax_decoder = JaxStructureTokenDecoder(d_model, n_heads, n_layers, key=key)
+    jax_decoder = autoconvert(jax_decoder, state_dict)
+
+    jax_out = jax_decoder.decode(jnp.array(structure_tokens[0]))
+
+    jax_affine = np.array(jax_out["tensor7_affine"])
+    jax_bb = np.array(jax_out["bb_pred"])
+    jax_plddt = np.array(jax_out["plddt"])
+    jax_ptm = np.array(jax_out["ptm"])
+    jax_pae = np.array(jax_out["predicted_aligned_error"])
+
+    print(f"affine max diff: {np.abs(torch_affine[0] - jax_affine).max()}")
+    print(f"bb max diff: {np.abs(torch_bb[0] - jax_bb).max()}")
+    print(f"plddt max diff: {np.abs(torch_plddt[0] - jax_plddt).max()}")
+    print(f"ptm diff: {np.abs(torch_ptm.item() - jax_ptm.item())}")
+    print(f"pae max diff: {np.abs(torch_pae[0] - jax_pae).max()}")
+
+    assert np.allclose(jax_affine, torch_affine[0], atol=3e-3)
+    assert np.allclose(jax_bb, torch_bb[0], atol=5e-3)
+    assert np.allclose(jax_plddt, torch_plddt[0], atol=1e-3)
+    assert np.abs(torch_ptm.item() - jax_ptm.item()) < 1e-3
+    assert np.allclose(jax_pae, torch_pae[0], atol=1e-3)
+
+
+def test_structure_token_decoder_pretrained():
+    from esm.pretrained import ESM3_structure_decoder_v0
+
+    torch_decoder = ESM3_structure_decoder_v0("cpu")
+    jax_decoder = JaxStructureTokenDecoder.from_pretrained()
+
+    np.random.seed(42)
+    seq_len = 7
+    structure_tokens = np.random.randint(0, 4096, size=(1, seq_len)).astype(np.int64)
+    structure_tokens[:, 0] = VQVAE_SPECIAL_TOKENS["BOS"]
+    structure_tokens[:, -1] = VQVAE_SPECIAL_TOKENS["EOS"]
+
+    with torch.no_grad():
+        torch_out = torch_decoder.decode(torch.from_numpy(structure_tokens))
+
+    jax_out = jax_decoder.decode(jnp.array(structure_tokens[0]))
+
+    torch_bb = torch_out["bb_pred"].numpy()
+    jax_bb = np.array(jax_out["bb_pred"])
+    torch_plddt = torch_out["plddt"].numpy()
+    jax_plddt = np.array(jax_out["plddt"])
+    torch_ptm = torch_out["ptm"].numpy()
+    jax_ptm = np.array(jax_out["ptm"])
+
+    print(f"bb max diff: {np.abs(torch_bb[0] - jax_bb).max()}")
+    print(f"plddt max diff: {np.abs(torch_plddt[0] - jax_plddt).max()}")
+    print(f"ptm diff: {np.abs(torch_ptm.item() - jax_ptm.item())}")
+
+    assert np.allclose(jax_bb, torch_bb[0], atol=0.5)
+    assert np.allclose(jax_plddt, torch_plddt[0], atol=5e-2)
+    assert np.abs(torch_ptm.item() - jax_ptm.item()) < 5e-2
