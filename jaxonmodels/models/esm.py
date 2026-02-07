@@ -2101,6 +2101,14 @@ def iterative_sample_structure(
     return structure_tokens
 
 
+def tokenize_sequence(sequence: str) -> list[int]:
+    tokens = [SEQUENCE_BOS_TOKEN]  # BOS = <cls>
+    for ch in sequence:
+        tokens.append(SEQUENCE_VOCAB.index(ch))
+    tokens.append(SEQUENCE_EOS_TOKEN)  # EOS = <eos>
+    return tokens
+
+
 def fold_protein(
     esm3_model,
     decoder: StructureTokenDecoder,
@@ -2113,10 +2121,7 @@ def fold_protein(
     *,
     key: PRNGKeyArray,
 ) -> dict:
-    tokens = [SEQUENCE_BOS_TOKEN]
-    for ch in sequence:
-        tokens.append(SEQUENCE_VOCAB.index(ch))
-    tokens.append(SEQUENCE_EOS_TOKEN)
+    tokens = tokenize_sequence(sequence)
     sequence_tokens = jnp.array(tokens, dtype=jnp.int32)
 
     structure_tokens = iterative_sample_structure(
