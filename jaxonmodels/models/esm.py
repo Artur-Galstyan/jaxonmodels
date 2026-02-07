@@ -8,6 +8,7 @@ from pathlib import Path
 import equinox as eqx
 import jax
 import jax.numpy as jnp
+import numpy as np
 from beartype.typing import Any, Literal, Self, Type, Union, cast
 from jaxonlayers.functions.activation import swiglu
 from jaxonlayers.functions.normalization import normalize
@@ -1616,13 +1617,7 @@ class ESM3(eqx.Module):
         return esm3
 
 
-BB_COORDINATES = jnp.array(
-    [
-        [0.5256, 1.3612, 0.0000],
-        [0.0000, 0.0000, 0.0000],
-        [-1.5251, 0.0000, 0.0000],
-    ]
-)
+BB_COORDINATES = np.array([[0.5256, 1.3612, 0.0], [0.0, 0.0, 0.0], [-1.5251, 0.0, 0.0]])
 
 
 class Dim6RotStructureHead(eqx.Module):
@@ -1677,7 +1672,9 @@ class Dim6RotStructureHead(eqx.Module):
         rigids = rigids.compose(update)
         affine_tensor = rigids.tensor
 
-        bb_local = jnp.broadcast_to(BB_COORDINATES[None, :, :], (seq_len, 3, 3))
+        bb_local = jnp.broadcast_to(
+            jnp.array(BB_COORDINATES)[None, :, :], (seq_len, 3, 3)
+        )
         pred_xyz = rigids[..., None].apply(bb_local)
 
         return affine_tensor, pred_xyz
