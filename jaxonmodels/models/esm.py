@@ -1141,6 +1141,10 @@ class ESMC(eqx.Module):
 
     inference: bool
 
+    d_model: int = eqx.field(static=True)
+    n_heads: int = eqx.field(static=True)
+    n_layers: int = eqx.field(static=True)
+
     def __init__(
         self,
         d_model: int,
@@ -1154,6 +1158,9 @@ class ESMC(eqx.Module):
         if not dtype:
             dtype = default_floating_dtype()
         assert dtype is not None
+        self.d_model = d_model
+        self.n_heads = n_heads
+        self.n_layers = n_layers
         self.inference = inference
         key, embed_key, transformer_stack_key, regression_head_key = jax.random.split(
             key, 4
