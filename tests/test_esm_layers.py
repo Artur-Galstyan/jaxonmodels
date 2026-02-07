@@ -208,7 +208,7 @@ def _make_block_inputs(batch, seq_len, d_model, use_frames, use_seq_id, seed=42)
 
 
 @pytest.mark.parametrize(
-    "d_model, n_heads, use_geom, v_heads, bias, expansion_ratio, scaling, qk_ln, ffn_type, use_frames, use_seq_id",
+    "d_model, n_heads, use_geom, v_heads, bias, expansion_ratio, scaling, qk_ln, ffn_type, use_frames, use_seq_id",  # noqa
     [
         (64, 4, False, None, False, 8 / 3, 1.0, True, "swiglu", False, True),
         (64, 4, True, 8, False, 8 / 3, 1.1547, True, "swiglu", True, False),
@@ -885,7 +885,6 @@ def test_esm3_forward_debug():
         )
 
     from jaxonmodels.models.esm import Affine3D as JaxAffine3D
-    from jaxonmodels.models.esm import RotationMatrix as JaxRotationMatrix
 
     def jax_transformer_single(x_i, affine_t_i, affine_m_i, chain_id_i):
         affine_i = JaxAffine3D.from_tensor(affine_t_i)
