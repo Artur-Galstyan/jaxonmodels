@@ -1192,6 +1192,7 @@ def test_structure_token_decoder(d_model, n_heads, n_layers, seq_len):
     assert np.allclose(jax_pae, torch_pae[0], atol=1e-3)
 
 
+@pytest.mark.skip("Because we get huggingface_hub.errors.GatedRepoError")
 def test_structure_token_decoder_pretrained():
     from esm.pretrained import ESM3_structure_decoder_v0
 
