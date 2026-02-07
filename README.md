@@ -1,5 +1,7 @@
 # Jaxonmodels
 
+🚨 This library is still under HEAVY development and won't reach version 1.0.0 in a long time!
+
 This library consists of deep learning model implementations in JAX using Equinox as the neural network library.
 
 The goal of this library is to provide simple, yet performant and easy to understand implementations with the aim to give *exactly* the same output as their Pytorch counterparts. As such, great emphasis is placed on making sure that the layers and the models behave accordingly.
@@ -20,7 +22,9 @@ These models have been implemented:
 - [x] ConvNext
 - [x] Swin Transformer
 - [ ] Siglip (in progress)
-- [x] VQ-VAE (in progress)
+- [x] VQ-VAE 
+- [x] ESMC
+- [x] ESM3
 
 
 ## Contributing

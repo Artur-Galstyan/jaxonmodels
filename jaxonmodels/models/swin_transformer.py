@@ -42,7 +42,7 @@ def get_relative_position_bias(
     window_size: list[int],
 ) -> Array:
     N = window_size[0] * window_size[1]
-    relative_position_bias = relative_position_bias_table[relative_position_index]  # type: ignore[index]
+    relative_position_bias = relative_position_bias_table[relative_position_index]
     relative_position_bias = relative_position_bias.reshape(N, N, -1)
     relative_position_bias = jnp.transpose(relative_position_bias, (2, 0, 1))
     return relative_position_bias
@@ -268,7 +268,7 @@ class ShiftedWindowAttention(eqx.nn.StatefulLayer):
         return get_relative_position_bias(
             self.relative_position_bias_table,
             state.get(self.relative_position_index),
-            self.window_size,  # type: ignore[arg-type]
+            self.window_size,
         )
 
     def __call__(
@@ -520,7 +520,7 @@ class SwinTransformerBlockV2(SwinTransformerBlock):
         key, subkey = jax.random.split(key)
 
         # Apply attention first, then norm (different from V1)
-        attn, state = self.attn(x, state)  # pyright: ignore
+        attn, state = self.attn(x, state)  # ty:ignore[call-non-callable]
         attn_norm = eqx.filter_vmap(eqx.filter_vmap(self.norm1))(attn)
         x = x + self.stochastic_depth(attn_norm, key=key)
 

@@ -1,6 +1,6 @@
 [project]
 name = "jaxonmodels"
-version = "1.0.0"
+version = "0.5.0"
 description = "JAX models for deep learning in Equinox"
 readme = "README.md"
 requires-python = ">=3.13"
@@ -25,9 +25,10 @@ dependencies = [
     "jaxonlayers"
 ]
 [project.optional-dependencies]
-dev = ["pre-commit", "pytest", "mkdocs"]
+dev = ["pre-commit", "pytest", "mkdocs", "vulture"]
 examples = ["tensorflow-cpu", "tensorflow_datasets", "clu", "requests"]
-tests = ["torch==2.10.0", "torchvision==0.25.0"]
+tests = ["torch", "torchvision", "esm>=3.2.3"]
+esm = ["tokenizers", "huggingface_hub", "transformers"]
 
 [tool.uv.sources]
 torch = { index = "pytorch" }
@@ -52,3 +53,9 @@ reportMissingImports = false
 [build-system]
 requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
+
+[dependency-groups]
+dev = [
+    "ty>=0.0.15",
+    "ruff>=0.15.0",
+]

@@ -9,7 +9,6 @@ import torch
 from jaxonlayers.layers import LayerNorm
 from statedict2pytree import (
     convert,
-    move_running_fields_to_the_end,
     pytree_to_fields,
     state_dict_to_fields,
 )
@@ -554,36 +553,36 @@ def test_swinv1_old():
     jax_head_w = np.array(jax_swin.head.weight)
     torch_head_w = torch_swin.head.weight.detach().numpy()
     print(
-        f"After convert - JAX head.weight shape: {jax_head_w.shape}, first 3: {jax_head_w.flatten()[:3]}"
+        f"After convert - JAX head.weight shape: {jax_head_w.shape}, first 3: {jax_head_w.flatten()[:3]}"  # noqa
     )
     print(
-        f"After convert - Torch head.weight shape: {torch_head_w.shape}, first 3: {torch_head_w.flatten()[:3]}"
+        f"After convert - Torch head.weight shape: {torch_head_w.shape}, first 3: {torch_head_w.flatten()[:3]}"  # noqa
     )
 
     # Debug: Check state values (relative_position_index should match torch)
     first_attn = jax_swin.features.layers[1].layers[0].attn
     jax_rel_pos_idx = state.get(first_attn.relative_position_index)
-    torch_rel_pos_idx = torch_swin.features[1][0].attn.relative_position_index.numpy()
+    torch_rel_pos_idx = torch_swin.features[1][0].attn.relative_position_index.numpy()  # noqa  # ty:ignore[not-subscriptable]
     print(
-        f"JAX rel_pos_idx shape: {jax_rel_pos_idx.shape}, first 5: {jax_rel_pos_idx.flatten()[:5]}"
+        f"JAX rel_pos_idx shape: {jax_rel_pos_idx.shape}, first 5: {jax_rel_pos_idx.flatten()[:5]}"  # noqa
     )
     print(
-        f"Torch rel_pos_idx shape: {torch_rel_pos_idx.shape}, first 5: {torch_rel_pos_idx.flatten()[:5]}"
+        f"Torch rel_pos_idx shape: {torch_rel_pos_idx.shape}, first 5: {torch_rel_pos_idx.flatten()[:5]}"  # noqa
     )
     print(
-        f"rel_pos_idx match: {np.allclose(np.array(jax_rel_pos_idx), torch_rel_pos_idx)}"
+        f"rel_pos_idx match: {np.allclose(np.array(jax_rel_pos_idx), torch_rel_pos_idx)}"  # noqa
     )
 
     # Debug: Check relative_position_bias_table
     jax_bias_table = np.array(first_attn.relative_position_bias_table)
     torch_bias_table = (
-        torch_swin.features[1][0].attn.relative_position_bias_table.detach().numpy()
+        torch_swin.features[1][0].attn.relative_position_bias_table.detach().numpy()  # ty:ignore[not-subscriptable]
     )
     print(
-        f"JAX bias_table shape: {jax_bias_table.shape}, first 3: {jax_bias_table.flatten()[:3]}"
+        f"JAX bias_table shape: {jax_bias_table.shape}, first 3: {jax_bias_table.flatten()[:3]}"  # noqa
     )
     print(
-        f"Torch bias_table shape: {torch_bias_table.shape}, first 3: {torch_bias_table.flatten()[:3]}"
+        f"Torch bias_table shape: {torch_bias_table.shape}, first 3: {torch_bias_table.flatten()[:3]}"  # noqa
     )
     print(
         f"bias_table match: {np.allclose(jax_bias_table, torch_bias_table, atol=1e-6)}"

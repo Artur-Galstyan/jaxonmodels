@@ -10,7 +10,7 @@ from jaxonmodels.models.clip import load_clip
 
 def resize_with_bicubic(image, target_size):
     """Resize an image using bicubic interpolation."""
-    return image.resize((target_size, target_size), resample=Image.BICUBIC)  # pyright: ignore
+    return image.resize((target_size, target_size), resample=Image.BICUBIC)  # ty:ignore[unresolved-attribute]
 
 
 def center_crop(image, crop_size):

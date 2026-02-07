@@ -23,13 +23,13 @@ def make_divisible(v: float, divisor: int, min_value: int | None = None) -> int:
 
 
 def make_ntuple(x: Any, n: int) -> tuple[Any, ...]:
-    if isinstance(x, collections.abc.Iterable):  # pyright: ignore
+    if isinstance(x, collections.abc.Iterable):  # ty:ignore[unresolved-reference]
         return tuple(x)
     return tuple(repeat(x, n))
 
 
 def default_floating_dtype():
-    if jax.config.jax_enable_x64:  # pyright: ignore
+    if jax.config.read("jax_enable_x64"):
         return jnp.float64
     else:
         return jnp.float32

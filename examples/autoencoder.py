@@ -1,18 +1,18 @@
-import clu.metrics as clum
+import clu.metrics as clum  # ty:ignore[unresolved-import]
 import equinox as eqx
 import jax
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
 import numpy as np
 import optax
-import tensorflow as tf
-import tensorflow_datasets as tfds
+import tensorflow as tf  # ty:ignore[unresolved-import]
+import tensorflow_datasets as tfds  # ty:ignore[unresolved-import]
 from jaxtyping import Array, PRNGKeyArray, PyTree
 from tqdm import tqdm
 
 
 class LossMetrics(eqx.Module, clum.Collection):
-    loss: clum.Average.from_output("loss")  # pyright: ignore
+    loss: clum.Average.from_output("loss")  # ty:ignore[invalid-type-form]
 
 
 tf.random.set_seed(42)
