@@ -27,7 +27,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["pre-commit", "pytest", "mkdocs", "vulture"]
 examples = ["tensorflow-cpu", "tensorflow_datasets", "clu", "requests"]
-tests = ["torch==2.10.0", "torchvision==0.25.0"]
+tests = ["torch", "torchvision", "esm>=3.0.3"]
 esm = ["tokenizers", "huggingface_hub", "transformers"]
 
 [tool.uv.sources]
