@@ -27,5 +27,5 @@ jobs:
       - name: Run ruff lint
         run: uv run ruff check .
 
-      - name: Run pyright
-        run: uv run pyright
+      - name: Run Ty
+        run: uv run ty check

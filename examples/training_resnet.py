@@ -3,9 +3,9 @@ import jax
 import jax.numpy as jnp
 import jaxtyping as jt
 import optax
-import tensorflow as tf
-import tensorflow_datasets as tfds
-from clu import metrics
+import tensorflow as tf  # ty:ignore[unresolved-import]
+import tensorflow_datasets as tfds  # ty:ignore[unresolved-import]
+from clu import metrics  # ty:ignore[unresolved-import]
 from tqdm import tqdm
 
 from jaxonmodels.models.resnet import ResNet, load_resnet
@@ -86,7 +86,7 @@ def step(
 
 
 class TrainMetrics(eqx.Module, metrics.Collection):
-    loss: metrics.Average.from_output("loss")  # pyright: ignore
+    loss: metrics.Average.from_output("loss")  # ty:ignore[invalid-type-form]
     accuracy: metrics.Accuracy
 
 

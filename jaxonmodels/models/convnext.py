@@ -205,7 +205,7 @@ class ConvNeXt(StatefulLayer):
                     )
                 )
                 stage_block_id += 1
-            layers.append(eqx.nn.Sequential(stage))  # pyright: ignore
+            layers.append(eqx.nn.Sequential(stage))  # ty:ignore[invalid-argument-type]
             if cnf.out_channels is not None:
                 # Downsampling
                 key, subkey = jax.random.split(key)
@@ -225,7 +225,7 @@ class ConvNeXt(StatefulLayer):
                     )
                 )
 
-        self.features = eqx.nn.Sequential(layers)  # pyright: ignore
+        self.features = eqx.nn.Sequential(layers)  # ty:ignore[invalid-argument-type]
         self.avgpool = eqx.nn.AdaptiveAvgPool2d(1)
 
         lastblock = block_setting[-1]

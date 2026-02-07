@@ -562,7 +562,7 @@ def test_swinv1_old():
     # Debug: Check state values (relative_position_index should match torch)
     first_attn = jax_swin.features.layers[1].layers[0].attn
     jax_rel_pos_idx = state.get(first_attn.relative_position_index)
-    torch_rel_pos_idx = torch_swin.features[1][0].attn.relative_position_index.numpy()  # noqa
+    torch_rel_pos_idx = torch_swin.features[1][0].attn.relative_position_index.numpy()  # noqa  # ty:ignore[not-subscriptable]
     print(
         f"JAX rel_pos_idx shape: {jax_rel_pos_idx.shape}, first 5: {jax_rel_pos_idx.flatten()[:5]}"  # noqa
     )
@@ -576,7 +576,7 @@ def test_swinv1_old():
     # Debug: Check relative_position_bias_table
     jax_bias_table = np.array(first_attn.relative_position_bias_table)
     torch_bias_table = (
-        torch_swin.features[1][0].attn.relative_position_bias_table.detach().numpy()
+        torch_swin.features[1][0].attn.relative_position_bias_table.detach().numpy()  # ty:ignore[not-subscriptable]
     )
     print(
         f"JAX bias_table shape: {jax_bias_table.shape}, first 3: {jax_bias_table.flatten()[:3]}"  # noqa
