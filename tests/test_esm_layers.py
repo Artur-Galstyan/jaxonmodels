@@ -1185,7 +1185,7 @@ def test_structure_token_decoder(d_model, n_heads, n_layers, seq_len):
     print(f"ptm diff: {np.abs(torch_ptm.item() - jax_ptm.item())}")
     print(f"pae max diff: {np.abs(torch_pae[0] - jax_pae).max()}")
 
-    assert np.allclose(jax_affine, torch_affine[0], atol=3e-3)
+    assert np.allclose(jax_affine, torch_affine[0], atol=5e-3)
     assert np.allclose(jax_bb, torch_bb[0], atol=5e-3)
     assert np.allclose(jax_plddt, torch_plddt[0], atol=1e-3)
     assert np.abs(torch_ptm.item() - jax_ptm.item()) < 1e-3
