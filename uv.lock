@@ -913,6 +913,7 @@ examples = [
     { name = "tensorflow-datasets" },
 ]
 tests = [
+    { name = "biotite" },
     { name = "esm" },
     { name = "torch", version = "2.10.0", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "sys_platform == 'darwin'" },
     { name = "torch", version = "2.10.0+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "sys_platform != 'darwin'" },
@@ -928,6 +929,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "beartype" },
+    { name = "biotite", marker = "extra == 'tests'", specifier = "==1.6.0" },
     { name = "clu", marker = "extra == 'examples'" },
     { name = "equinox" },
     { name = "esm", marker = "extra == 'tests'", specifier = ">=3.0.3" },
@@ -951,8 +953,8 @@ requires-dist = [
     { name = "tensorflow-cpu", marker = "extra == 'examples'" },
     { name = "tensorflow-datasets", marker = "extra == 'examples'" },
     { name = "tokenizers", marker = "extra == 'esm'" },
-    { name = "torch", marker = "extra == 'tests'", index = "https://download.pytorch.org/whl/cpu" },
-    { name = "torchvision", marker = "extra == 'tests'", index = "https://download.pytorch.org/whl/cpu" },
+    { name = "torch", marker = "extra == 'tests'", specifier = "==2.10.0", index = "https://download.pytorch.org/whl/cpu" },
+    { name = "torchvision", marker = "extra == 'tests'", specifier = "==0.25.0", index = "https://download.pytorch.org/whl/cpu" },
     { name = "tqdm" },
     { name = "transformers", marker = "extra == 'esm'" },
     { name = "typing-extensions" },
