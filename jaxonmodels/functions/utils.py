@@ -35,6 +35,10 @@ def default_floating_dtype():
         return jnp.float32
 
 
+def default_training_dtype():
+    return jnp.bfloat16
+
+
 def dtype_to_str(dtype) -> str:
     if hasattr(dtype, "__name__"):
         # For simple types like jnp.float32, float, etc.
