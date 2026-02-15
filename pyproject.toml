@@ -1,6 +1,6 @@
 [project]
 name = "jaxonmodels"
-version = "0.5.3"
+version = "0.5.4"
 description = "JAX models for deep learning in Equinox"
 readme = "README.md"
 requires-python = ">=3.13"
@@ -59,3 +59,6 @@ dev = [
     "ty>=0.0.15",
     "ruff>=0.15.0",
 ]
+
+[tool.setuptools.packages.find]
+include = ["jaxonmodels*"]

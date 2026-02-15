@@ -175,3 +175,7 @@ checkpoints/
 *.fasta
 *.gz
 *.arrayrecord
+*.pkl
+data/
+.claude/
+notebooks/

@@ -89,6 +89,7 @@ class MambaBlock(eqx.Module):
         d_inner: int,
         dt_rank: int,
         d_conv: int,
+        d_state: int = 16,
         use_in_projection_bias: bool = True,
         use_conv_bias: bool = True,
         use_out_proj_bias: bool = True,
@@ -124,7 +125,7 @@ class MambaBlock(eqx.Module):
         self.ssm = SelectiveStateSpaceModel(
             d_inner=d_inner,
             dt_rank=dt_rank,
-            d_state=d_inner,
+            d_state=d_state,
             use_delta_proj_bias=ssm_use_delta_proj_bias,
             use_input_proj_bias=ssm_use_input_proj_bias,
             key=ssm_key,
