@@ -1,5 +1,6 @@
 from itertools import repeat
 
+import equinox as eqx
 import jax
 import jax.numpy as jnp
 from beartype.typing import Any
@@ -79,3 +80,45 @@ def default_init(
         return real.astype(dtype) + 1j * imag.astype(dtype)
     else:
         return jax.random.uniform(key, shape, dtype, minval=-lim, maxval=lim)
+
+
+def param_summary(model: eqx.Module, print_summary: bool = False):
+    leaves_with_path = jax.tree_util.tree_leaves_with_path(
+        model, is_leaf=eqx.is_array_like
+    )
+    total = 0
+    rows = []
+    for path, leaf in leaves_with_path:
+        if not hasattr(leaf, "shape"):
+            continue
+        name = "".join(
+            str(p.key)
+            if hasattr(p, "key")
+            else str(p.idx)
+            if hasattr(p, "idx")
+            else str(p)
+            for p in path
+        )
+        n = 1
+        for s in leaf.shape:
+            n *= s
+        rows.append((name, str(leaf.shape), n))
+        total += n
+
+    if print_summary:
+        name_w = max(len(r[0]) for r in rows)
+        shape_w = max(len(r[1]) for r in rows)
+        param_w = max(len(f"{r[2]:,}") for r in rows)
+
+        header = f"{'Layer':<{name_w}}  {'Shape':<{shape_w}}  {'Params':>{param_w}}"
+        sep = "-" * len(header)
+
+        print(sep)
+        print(header)
+        print(sep)
+        for name, shape, n in rows:
+            print(f"{name:<{name_w}}  {shape:<{shape_w}}  {n:>{param_w},}")
+        print(sep)
+        print(f"{'Total':<{name_w}}  {'':<{shape_w}}  {total:>{param_w},}")
+        print(sep)
+    return total
