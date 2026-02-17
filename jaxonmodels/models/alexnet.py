@@ -159,9 +159,6 @@ class AlexNet(eqx.Module):
             weights_file, map_location=torch.device("cpu"), weights_only=True
         )
 
-        for k in weights_dict:
-            print(k)
-
         alexnet = autoconvert(alexnet, weights_dict, dtype=dtype)
 
         eqx.tree_serialise_leaves(

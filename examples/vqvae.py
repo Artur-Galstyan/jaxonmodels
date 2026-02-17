@@ -1,12 +1,12 @@
-import clu.metrics as clum  # ty:ignore[unresolved-import]
+import clu.metrics as clum
 import equinox as eqx
 import jax
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
 import numpy as np
 import optax
-import tensorflow as tf  # ty:ignore[unresolved-import]
-import tensorflow_datasets as tfds  # ty:ignore[unresolved-import]
+import tensorflow as tf
+import tensorflow_datasets as tfds
 from jaxtyping import Array, Float, PRNGKeyArray, PyTree
 from tqdm import tqdm
 
@@ -18,7 +18,7 @@ class LossMetrics(eqx.Module, clum.Collection):
 tf.random.set_seed(42)
 np.random.seed(42)
 
-(train_ds, test_ds), ds_info = tfds.load(
+(train_ds, test_ds), ds_info = tfds.load(  # ty:ignore[possibly-missing-attribute]
     "mnist",
     split=["train", "test"],
     shuffle_files=True,

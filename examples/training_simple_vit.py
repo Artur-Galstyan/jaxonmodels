@@ -4,9 +4,9 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 import optax
-import tensorflow as tf  # ty:ignore[unresolved-import]
-import tensorflow_datasets as tfds  # ty:ignore[unresolved-import]
-from clu import metrics  # ty:ignore[unresolved-import]
+import tensorflow as tf
+import tensorflow_datasets as tfds
+from clu import metrics
 from jaxtyping import Array, Float, Int, PRNGKeyArray, PyTree
 from tqdm import tqdm
 
@@ -58,7 +58,7 @@ class Model(eqx.Module):
 
 
 # Load SVHN dataset
-(train_ds, test_ds), ds_info = tfds.load(
+(train_ds, test_ds), ds_info = tfds.load(  # ty:ignore[possibly-missing-attribute]
     "svhn_cropped",
     split=["train", "test"],
     as_supervised=True,
@@ -124,8 +124,8 @@ test_ds = test_ds.batch(BATCH_SIZE)
 test_ds = test_ds.prefetch(AUTOTUNE)
 
 
-train_dataset = tfds.as_numpy(train_ds)
-test_dataset = tfds.as_numpy(test_ds)
+train_dataset = tfds.as_numpy(train_ds)  # ty:ignore[possibly-missing-attribute]
+test_dataset = tfds.as_numpy(test_ds)  # ty:ignore[possibly-missing-attribute]
 
 model, state = eqx.nn.make_with_state(Model)(key=jax.random.key(42))
 
