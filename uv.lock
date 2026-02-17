@@ -3331,7 +3331,7 @@ wheels = [
 
 [[package]]
 name = "statedict2pytree"
-version = "2.0.0"
+version = "2.0.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "beartype" },
@@ -3342,9 +3342,9 @@ dependencies = [
     { name = "pydantic" },
     { name = "tqdm" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/bc/60/47fc7ee7cfafd6058cf5374d15ad577940fcbbf4f7f0103664588d9bb3d6/statedict2pytree-2.0.0.tar.gz", hash = "sha256:dcf2e900218b45a421176df43f8da0034bcef4c3e9373b8d74bcd06abb3c80e0", size = 103684, upload-time = "2026-02-04T15:49:31.026Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/c3/06/7c9d72f540f1e70da044be794772e32bcf0f765da21f5e92145264392a17/statedict2pytree-2.0.1.tar.gz", hash = "sha256:61829bb08a791d44eaf54934a92cdfd552903736071e270cf92cbd0bfad3d71f", size = 103675, upload-time = "2026-02-17T21:15:30.717Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/72/3d/697bcffe7b03c86f14a62ab434ac4e059ceb16ab7daab65c6b292304fbe2/statedict2pytree-2.0.0-py3-none-any.whl", hash = "sha256:6d6be919dfa9a04af7bde9fa535c70a601c20d628e97d369070735491d75de39", size = 5334, upload-time = "2026-02-04T15:49:32.442Z" },
+    { url = "https://files.pythonhosted.org/packages/1b/83/f0631a3e4e0f4777d3be569821b056eff6a87a6ccde203a5575f999a146c/statedict2pytree-2.0.1-py3-none-any.whl", hash = "sha256:a0aae04ea3e23d30533d1c0163d1ea2179955565feb6998c5d0901b1f75ac2f7", size = 5327, upload-time = "2026-02-17T21:15:32.292Z" },
 ]
 
 [[package]]
