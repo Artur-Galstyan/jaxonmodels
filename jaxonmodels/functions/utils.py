@@ -1,3 +1,5 @@
+import os
+import pathlib
 from itertools import repeat
 
 import equinox as eqx
@@ -122,3 +124,9 @@ def param_summary(model: eqx.Module, print_summary: bool = False):
         print(f"{'Total':<{name_w}}  {'':<{shape_w}}  {total:>{param_w},}")
         print(sep)
     return total
+
+
+def get_cache_path(model: str):
+    jaxonmodels_dir = os.path.expanduser(f"~/.jaxonmodels/models/{model}")
+    os.makedirs(jaxonmodels_dir, exist_ok=True)
+    return pathlib.Path(jaxonmodels_dir)
