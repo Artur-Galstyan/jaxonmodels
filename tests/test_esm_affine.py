@@ -3,31 +3,31 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 import torch
-from esm.utils.structure.affine3d import (  # ty:ignore[unresolved-import]
+from esm.utils.structure.affine3d import (
     Affine3D as TorchAffine3D,
 )
-from esm.utils.structure.affine3d import (  # ty:ignore[unresolved-import]
+from esm.utils.structure.affine3d import (
     RotationMatrix as TorchRotationMatrix,
 )
-from esm.utils.structure.affine3d import (  # ty:ignore[unresolved-import]
+from esm.utils.structure.affine3d import (
     RotationQuat as TorchRotationQuat,
 )
-from esm.utils.structure.affine3d import (  # ty:ignore[unresolved-import]
+from esm.utils.structure.affine3d import (
     _graham_schmidt as torch_graham_schmidt,
 )
-from esm.utils.structure.affine3d import (  # ty:ignore[unresolved-import]
+from esm.utils.structure.affine3d import (
     _quat_invert as torch_quat_invert,
 )
-from esm.utils.structure.affine3d import (  # ty:ignore[unresolved-import]
+from esm.utils.structure.affine3d import (
     _quat_mult as torch_quat_mult,
 )
-from esm.utils.structure.affine3d import (  # ty:ignore[unresolved-import]
+from esm.utils.structure.affine3d import (
     _quat_rotation as torch_quat_rotation,
 )
-from esm.utils.structure.affine3d import (  # ty:ignore[unresolved-import]
+from esm.utils.structure.affine3d import (
     _sqrt_subgradient as torch_sqrt_subgradient,
 )
-from esm.utils.structure.affine3d import (  # ty:ignore[unresolved-import]
+from esm.utils.structure.affine3d import (
     build_affine3d_from_coordinates as torch_build_affine,
 )
 

@@ -50,12 +50,12 @@ def load_models():
     jax_esm3 = JaxESM3.from_pretrained("esm3_open")
 
     print("[2/7] Loading PyTorch ESM3 model...")
-    from esm.models.esm3 import ESM3 as TorchESM3  # ty:ignore[unresolved-import]
+    from esm.models.esm3 import ESM3 as TorchESM3
 
     torch_esm3 = TorchESM3.from_pretrained("esm3-open")
 
     print("[3/7] Loading structure decoders...")
-    from esm.pretrained import ESM3_structure_decoder_v0  # ty:ignore[unresolved-import]
+    from esm.pretrained import ESM3_structure_decoder_v0
 
     from jaxonmodels.models.esm import StructureTokenDecoder as JaxDecoder
 
@@ -71,7 +71,7 @@ def jit_forward(model, sequence_tokens):
 
 
 def encode_sequence(sequence, torch_esm3):
-    from esm.sdk.api import ESMProtein  # ty:ignore[unresolved-import]
+    from esm.sdk.api import ESMProtein
 
     protein = ESMProtein(sequence=sequence)
     protein_tensor = torch_esm3.encode(protein)

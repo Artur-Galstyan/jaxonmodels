@@ -4,29 +4,29 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 import torch
-from esm.layers.attention import MultiHeadAttention  # ty:ignore[unresolved-import]
-from esm.layers.blocks import (  # ty:ignore[unresolved-import]
+from esm.layers.attention import MultiHeadAttention
+from esm.layers.blocks import (
     UnifiedTransformerBlock as TorchBlock,
 )
-from esm.layers.geom_attention import (  # ty:ignore[unresolved-import]
+from esm.layers.geom_attention import (
     GeometricReasoningOriginalImpl as TorchGeomAttn,
 )
-from esm.layers.transformer_stack import (  # ty:ignore[unresolved-import]
+from esm.layers.transformer_stack import (
     TransformerStack as TorchTransformerStack,
 )
-from esm.models.esm3 import ESM3 as TorchESM3  # ty:ignore[unresolved-import]
-from esm.models.esm3 import (  # ty:ignore[unresolved-import]
+from esm.models.esm3 import ESM3 as TorchESM3
+from esm.models.esm3 import (
     EncodeInputs as TorchEncodeInputs,
 )
-from esm.models.esm3 import (  # ty:ignore[unresolved-import]
+from esm.models.esm3 import (
     OutputHeads as TorchOutputHeads,
 )
-from esm.models.esmc import ESMC as TorchESMC  # ty:ignore[unresolved-import]
-from esm.tokenization import EsmSequenceTokenizer  # ty:ignore[unresolved-import]
-from esm.utils.structure.affine3d import (  # ty:ignore[unresolved-import]
+from esm.models.esmc import ESMC as TorchESMC
+from esm.tokenization import EsmSequenceTokenizer
+from esm.utils.structure.affine3d import (
     Affine3D as TorchAffine3D,
 )
-from esm.utils.structure.affine3d import (  # ty:ignore[unresolved-import]
+from esm.utils.structure.affine3d import (
     RotationMatrix as TorchRotationMatrix,
 )
 from statedict2pytree.converter import autoconvert
@@ -690,10 +690,10 @@ def test_esm3_forward(d_model, n_heads, v_heads, n_layers, seq_len):
         n_heads,
         v_heads,
         n_layers,
-        structure_encoder_fn=None,
-        structure_decoder_fn=None,
-        function_decoder_fn=None,
-        tokenizers=_MockTokenizers(),
+        structure_encoder_fn=None,  # ty:ignore[invalid-argument-type]
+        structure_decoder_fn=None,  # ty:ignore[invalid-argument-type]
+        function_decoder_fn=None,  # ty:ignore[invalid-argument-type]
+        tokenizers=_MockTokenizers(),  # ty:ignore[invalid-argument-type]
     )
     state_dict = torch_model.state_dict()
 
@@ -779,10 +779,10 @@ def test_esm3_forward_debug():
         n_heads,
         v_heads,
         n_layers,
-        structure_encoder_fn=None,
-        structure_decoder_fn=None,
-        function_decoder_fn=None,
-        tokenizers=_MockTokenizers(),
+        structure_encoder_fn=None,  # ty:ignore[invalid-argument-type]
+        structure_decoder_fn=None,  # ty:ignore[invalid-argument-type]
+        function_decoder_fn=None,  # ty:ignore[invalid-argument-type]
+        tokenizers=_MockTokenizers(),  # ty:ignore[invalid-argument-type]
     )
     state_dict = torch_model.state_dict()
 
@@ -846,7 +846,7 @@ def test_esm3_forward_debug():
     print("Match:", np.allclose(torch_enc, jax_enc, atol=1e-4))
     print("Max diff:", np.abs(torch_enc - jax_enc).max())
 
-    from esm.utils.structure.affine3d import (  # ty:ignore[unresolved-import]
+    from esm.utils.structure.affine3d import (
         build_affine3d_from_coordinates as torch_build_affine,
     )
 
@@ -946,10 +946,10 @@ def test_esm3_forward_no_vmap():
         n_heads,
         v_heads,
         n_layers,
-        structure_encoder_fn=None,
-        structure_decoder_fn=None,
-        function_decoder_fn=None,
-        tokenizers=_MockTokenizers(),
+        structure_encoder_fn=None,  # ty:ignore[invalid-argument-type]
+        structure_decoder_fn=None,  # ty:ignore[invalid-argument-type]
+        function_decoder_fn=None,  # ty:ignore[invalid-argument-type]
+        tokenizers=_MockTokenizers(),  # ty:ignore[invalid-argument-type]
     )
     state_dict = torch_model.state_dict()
 
@@ -1002,8 +1002,8 @@ def test_full_model_esmc(model_name):
 
     jax_esmc_300 = JaxESMC.from_pretrained(model_name)
 
-    from esm.models.esmc import ESMC  # ty:ignore[unresolved-import]
-    from esm.sdk.api import (  # ty:ignore[unresolved-import]
+    from esm.models.esmc import ESMC
+    from esm.sdk.api import (
         ESMProtein,
     )
 
@@ -1040,8 +1040,8 @@ def test_full_model_esmc(model_name):
 def test_full_model_esm3():
     jax_esm3 = JaxESM3.from_pretrained("esm3_open")
 
-    from esm.models.esm3 import ESM3 as TorchESM3  # ty:ignore[unresolved-import]
-    from esm.sdk.api import ESMProtein  # ty:ignore[unresolved-import]
+    from esm.models.esm3 import ESM3 as TorchESM3
+    from esm.sdk.api import ESMProtein
 
     client = TorchESM3.from_pretrained("esm3-open")
 
@@ -1076,7 +1076,7 @@ def test_dim6rot_structure_head(d_model, seq_len):
     x = np.random.randn(1, seq_len, d_model).astype(np.float32)
     affine_mask = np.zeros((1, seq_len), dtype=np.bool_)
 
-    from esm.layers.structure_proj import (  # ty:ignore[unresolved-import]
+    from esm.layers.structure_proj import (
         Dim6RotStructureHead as TorchDim6Rot,
     )
 
@@ -1115,7 +1115,7 @@ def test_pairwise_prediction_head(d_model, seq_len):
 
     x = np.random.randn(1, seq_len, d_model).astype(np.float32)
 
-    from esm.models.vqvae import (  # ty:ignore[unresolved-import]
+    from esm.models.vqvae import (
         PairwisePredictionHead as TorchPairwise,
     )
 
@@ -1165,7 +1165,7 @@ def test_structure_token_decoder(d_model, n_heads, n_layers, seq_len):
     structure_tokens[:, 0] = VQVAE_SPECIAL_TOKENS["BOS"]
     structure_tokens[:, -1] = VQVAE_SPECIAL_TOKENS["EOS"]
 
-    from esm.models.vqvae import (  # ty:ignore[unresolved-import]
+    from esm.models.vqvae import (
         StructureTokenDecoder as TorchDecoder,
     )
 
@@ -1208,7 +1208,7 @@ def test_structure_token_decoder(d_model, n_heads, n_layers, seq_len):
 
 @pytest.mark.skip("Because we get huggingface_hub.errors.GatedRepoError")
 def test_structure_token_decoder_pretrained():
-    from esm.pretrained import ESM3_structure_decoder_v0  # ty:ignore[unresolved-import]
+    from esm.pretrained import ESM3_structure_decoder_v0
 
     torch_decoder = ESM3_structure_decoder_v0("cpu")
     jax_decoder = JaxStructureTokenDecoder.from_pretrained()

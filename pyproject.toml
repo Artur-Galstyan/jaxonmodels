@@ -45,6 +45,9 @@ ignore = ["E402", "E721", "E731", "E741", "F722", "F821"]
 select = ["E", "F", "I001"]
 
 
+[tool.ty.rules]
+possibly-missing-attribute = "ignore"
+
 [tool.pyright]
 reportIncompatibleMethodOverride = true
 reportMissingImports = false

@@ -23,7 +23,7 @@ def setup_mlflow(experiment_name: str = "Text Diffusion"):
     mlflow.set_experiment(experiment_name)
 
 
-@flax.struct.dataclass  # ty:ignore[possibly-missing-attribute]
+@flax.struct.dataclass
 class LossMetrics(clum.Collection):
     loss: clum.Average.from_output("loss")  # ty:ignore[invalid-type-form]
 
@@ -383,12 +383,12 @@ def main():
     mlflow.set_tracking_uri(tracking_url)
     mlflow.set_experiment("TinyShakespeare_Diffusion_DISCRETE")
 
-    with mlflow.start_run():  # ty:ignore[possibly-missing-attribute]
-        mlflow.log_param("batch_size", batch_size)  # ty:ignore[possibly-missing-attribute]
-        mlflow.log_param("sequence_length", sequence_length)  # ty:ignore[possibly-missing-attribute]
-        mlflow.log_param("embed_dim", embed_dim)  # ty:ignore[possibly-missing-attribute]
-        mlflow.log_param("learning_rate", learning_rate)  # ty:ignore[possibly-missing-attribute]
-        mlflow.log_param("num_epochs", num_epochs)  # ty:ignore[possibly-missing-attribute]
+    with mlflow.start_run():
+        mlflow.log_param("batch_size", batch_size)
+        mlflow.log_param("sequence_length", sequence_length)
+        mlflow.log_param("embed_dim", embed_dim)
+        mlflow.log_param("learning_rate", learning_rate)
+        mlflow.log_param("num_epochs", num_epochs)
 
         for step, batch in enumerate(loader):
             x_0_batch = batch["input"]
@@ -405,7 +405,7 @@ def main():
                 epoch = (step + 1) // steps_per_epoch
                 avg_loss = metrics.compute()["loss"]
                 print(f"Epoch {epoch}/{num_epochs}: Loss = {avg_loss:.6f}")
-                mlflow.log_metric("train_loss", float(avg_loss), step=step)  # ty:ignore[possibly-missing-attribute]
+                mlflow.log_metric("train_loss", float(avg_loss), step=step)
 
                 if epoch % 5 == 0:
                     print(f"--- Generating Samples for Epoch {epoch} ---")
@@ -413,7 +413,7 @@ def main():
                     samples = generate_samples(model, num_samples=3, key=gen_key)
                     for idx, s in enumerate(samples):
                         print(f"Sample {idx}: {s}")
-                        mlflow.log_text(s, f"samples/epoch_{epoch}_sample_{idx}.txt")  # ty:ignore[possibly-missing-attribute]
+                        mlflow.log_text(s, f"samples/epoch_{epoch}_sample_{idx}.txt")
 
                 metrics = LossMetrics.empty()
 

@@ -18,7 +18,7 @@ class LossMetrics(eqx.Module, clum.Collection):
 tf.random.set_seed(42)
 np.random.seed(42)
 
-(train_ds, test_ds), ds_info = tfds.load(  # ty:ignore[possibly-missing-attribute]
+(train_ds, test_ds), ds_info = tfds.load(
     "mnist",
     split=["train", "test"],
     shuffle_files=True,

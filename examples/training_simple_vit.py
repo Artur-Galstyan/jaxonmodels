@@ -58,7 +58,7 @@ class Model(eqx.Module):
 
 
 # Load SVHN dataset
-(train_ds, test_ds), ds_info = tfds.load(  # ty:ignore[possibly-missing-attribute]
+(train_ds, test_ds), ds_info = tfds.load(
     "svhn_cropped",
     split=["train", "test"],
     as_supervised=True,
@@ -124,8 +124,8 @@ test_ds = test_ds.batch(BATCH_SIZE)
 test_ds = test_ds.prefetch(AUTOTUNE)
 
 
-train_dataset = tfds.as_numpy(train_ds)  # ty:ignore[possibly-missing-attribute]
-test_dataset = tfds.as_numpy(test_ds)  # ty:ignore[possibly-missing-attribute]
+train_dataset = tfds.as_numpy(train_ds)
+test_dataset = tfds.as_numpy(test_ds)
 
 model, state = eqx.nn.make_with_state(Model)(key=jax.random.key(42))
 

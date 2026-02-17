@@ -10,7 +10,7 @@ from tqdm import tqdm
 
 from jaxonmodels.models.resnet import ResNet, load_resnet
 
-(train, test), info = tfds.load(  # ty:ignore[possibly-missing-attribute]
+(train, test), info = tfds.load(
     "cifar10", split=["train", "test"], with_info=True, as_supervised=True
 )  # pyright: ignore
 
@@ -51,8 +51,8 @@ test_dataset = test.map(preprocess, num_parallel_calls=tf.data.AUTOTUNE)
 test_dataset = test_dataset.batch(BATCH_SIZE)
 test_dataset = test_dataset.prefetch(tf.data.AUTOTUNE)
 
-train_dataset = tfds.as_numpy(train_dataset)  # ty:ignore[possibly-missing-attribute]
-test_dataset = tfds.as_numpy(test_dataset)  # ty:ignore[possibly-missing-attribute]
+train_dataset = tfds.as_numpy(train_dataset)
+test_dataset = tfds.as_numpy(test_dataset)
 
 
 def loss_fn(
