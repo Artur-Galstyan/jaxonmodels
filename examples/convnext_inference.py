@@ -5,14 +5,19 @@ import torchvision.transforms as transforms
 from PIL import Image
 from torchvision.models import ConvNeXt_Base_Weights
 
-from jaxonmodels.models.convnext import load_convnext
+from jaxonmodels.models.convnext import ConvNeXt
 
 
 def main():
     # Load the ConvNeXt model with pre-trained weights
     # Note: ConvNeXt doesn't return state like EfficientNet
-    model, state = load_convnext(
-        "convnext_base", weights="convnext_base_IMAGENET1K_V1", dtype=jnp.float32
+    # model, state = load_convnext(
+    #     "convnext_base", weights="convnext_base_IMAGENET1K_V1", dtype=jnp.float32
+    # )
+    model, state = ConvNeXt.with_weights(
+        "convnext_base",
+        dtype=jnp.float32,
+        key=jax.random.key(22),
     )
 
     model, state = eqx.nn.inference_mode((model, state))

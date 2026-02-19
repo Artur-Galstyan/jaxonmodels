@@ -134,10 +134,24 @@ class AlexNet(eqx.Module):
         return x
 
     @staticmethod
-    def with_weights(key: PRNGKeyArray, dtype: Any | None = None) -> "AlexNet":
+    def with_weights(
+        model: str | None = None,
+        key: PRNGKeyArray | None = None,
+        dtype: Any | None = None,
+    ) -> "AlexNet":
+        """
+        Loads alexnet. The model parameter is unused (there are no variants of AlexNet).
+        If no key is provided, the default key (42) is used. Dtype defaults to float32.
+
+        Returns:
+            AlexNet
+        """
         if dtype is None:
             dtype = default_floating_dtype()
         assert dtype is not None
+
+        if key is None:
+            key = jax.random.key(42)
 
         dtype_str = dtype_to_str(dtype)
         alexnet = AlexNet(n_classes=1000, key=key, dtype=dtype)
