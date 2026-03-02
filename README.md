@@ -1,6 +1,6 @@
 # Jaxonmodels
 
-🚨 This library is still under HEAVY development and won't reach version 1.0.0 in a long time!
+🚨 ATTENTION: I consolidated jaxonlayers and jaxonmodels into a single repo called noxton. All future development will happen there!
 
 This library consists of deep learning model implementations in JAX using Equinox as the neural network library.
 
